@@ -8,6 +8,7 @@ pub struct App {
     pub previous_snapshot: Option<NetworkSnapshot>,
     pub selected_index: usize,
     pub recent_events: Vec<NetworkEvent>,
+    pub show_all: bool,
 }
 
 impl App {

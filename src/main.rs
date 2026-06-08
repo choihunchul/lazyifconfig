@@ -13,7 +13,7 @@ use lazyifconfig::collector::stats::merge_stats;
 use lazyifconfig::model::NetworkSnapshot;
 
 pub fn tick_update(app: &mut App) -> Result<(), String> {
-    let raw_out = run_ifconfig()?;
+    let raw_out = run_ifconfig(app.show_all)?;
     let parsed = parse_interfaces(&raw_out);
     let merged = merge_stats(&raw_out, parsed);
     
@@ -63,6 +63,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
                         app.select_previous();
+                    }
+                    KeyCode::Char('a') => {
+                        app.show_all = !app.show_all;
+                        let _ = tick_update(&mut app);
+                        last_tick = std::time::Instant::now();
                     }
                     _ => {}
                 }

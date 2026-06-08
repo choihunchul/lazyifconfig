@@ -114,7 +114,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
     frame.render_widget(event_list, chunks[1]);
 
     // 4. Status Bar
-    let status_p = Paragraph::new(" q: Quit | r: Manual Refresh | j/k or Arrow Keys: Navigation ")
+    let status_text = format!(
+        " q: Quit | r: Manual Refresh | a: Toggle -a ({}) | j/k or Arrow Keys: Navigation ",
+        if app.show_all { "ON" } else { "OFF" }
+    );
+    let status_p = Paragraph::new(status_text)
         .style(Style::default().bg(Color::Blue).fg(Color::White));
     frame.render_widget(status_p, chunks[2]);
 }
