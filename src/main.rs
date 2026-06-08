@@ -6,7 +6,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
-use lazyifconfig::app::{App, ViewMode};
+use lazyifconfig::app::{App, ViewMode, NavigationItem};
 use lazyifconfig::command::{run_ifconfig, run_netstat, run_netstat_an, run_netstat_ib};
 use lazyifconfig::collector::interface::{parse_interfaces, merge_gateways};
 use lazyifconfig::collector::stats::merge_stats;
@@ -90,7 +90,103 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         app.set_view_mode(ViewMode::Network);
                     }
                     KeyCode::Char('c') | KeyCode::Char('ㅊ') => {
-                        app.set_view_mode(ViewMode::Connections);
+                        if app.view_mode == ViewMode::Connections {
+                            if let Some(NavigationItem::Connection { foreign, .. }) = app.navigation_items.get(app.selected_index) {
+                                let foreign_ip = if let Some(pos) = foreign.rfind(':') {
+                                    &foreign[..pos]
+                                } else {
+                                    foreign.as_str()
+                                };
+                                if foreign_ip != "*" && foreign_ip != "::" && foreign_ip != "0.0.0.0" && foreign_ip != "*.*" {
+                                    if let Err(e) = lazyifconfig::command::copy_to_clipboard(foreign_ip) {
+                                        let now = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .map(|d| d.as_secs())
+                                            .unwrap_or(0);
+                                        app.recent_events.push(lazyifconfig::model::NetworkEvent::new(
+                                            format!("Failed to copy IP: {}", e),
+                                            now,
+                                        ));
+                                        if app.recent_events.len() > 50 {
+                                            let overflow = app.recent_events.len() - 50;
+                                            app.recent_events.drain(0..overflow);
+                                        }
+                                    } else {
+                                        let now = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .map(|d| d.as_secs())
+                                            .unwrap_or(0);
+                                        app.recent_events.push(lazyifconfig::model::NetworkEvent::new(
+                                            format!("Copied IP {} to clipboard", foreign_ip),
+                                            now,
+                                        ));
+                                        if app.recent_events.len() > 50 {
+                                            let overflow = app.recent_events.len() - 50;
+                                            app.recent_events.drain(0..overflow);
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            app.set_view_mode(ViewMode::Connections);
+                        }
+                    }
+                    KeyCode::Char('w') | KeyCode::Char('ㅈ') => {
+                        if app.view_mode == ViewMode::Connections {
+                            if let Some(NavigationItem::Connection { foreign, .. }) = app.navigation_items.get(app.selected_index) {
+                                let foreign_ip = if let Some(pos) = foreign.rfind(':') {
+                                    &foreign[..pos]
+                                } else {
+                                    foreign.as_str()
+                                };
+                                if foreign_ip != "*" && foreign_ip != "::" && foreign_ip != "0.0.0.0" && foreign_ip != "*.*" {
+                                    let mut should_fetch = false;
+                                    if let Ok(lock) = app.whois_cache.lock() {
+                                        if !lock.contains_key(foreign_ip) || lock.get(foreign_ip).map(|s| s.as_str()) != Some("Loading...") {
+                                            should_fetch = true;
+                                        }
+                                    }
+                                    
+                                    if should_fetch {
+                                        if let Ok(mut lock) = app.whois_cache.lock() {
+                                            lock.insert(foreign_ip.to_string(), "Loading...".to_string());
+                                        }
+                                        
+                                        let now = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .map(|d| d.as_secs())
+                                            .unwrap_or(0);
+                                        app.recent_events.push(lazyifconfig::model::NetworkEvent::new(
+                                            format!("Starting WHOIS lookup for {}", foreign_ip),
+                                            now,
+                                        ));
+                                        if app.recent_events.len() > 50 {
+                                            let overflow = app.recent_events.len() - 50;
+                                            app.recent_events.drain(0..overflow);
+                                        }
+                                        
+                                        let cache_clone = app.whois_cache.clone();
+                                        let ip_clone = foreign_ip.to_string();
+                                        
+                                        tokio::spawn(async move {
+                                            let result = match lazyifconfig::command::run_whois(&ip_clone) {
+                                                Ok(out) => out,
+                                                Err(e) => format!("Error running whois: {}", e),
+                                            };
+                                            if let Ok(mut lock) = cache_clone.lock() {
+                                                lock.insert(ip_clone, result);
+                                            }
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    KeyCode::Char('[') => {
+                        app.scroll_details_up();
+                    }
+                    KeyCode::Char(']') => {
+                        app.scroll_details_down();
                     }
                     _ => {}
                 }

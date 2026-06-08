@@ -42,6 +42,8 @@ pub struct App {
     pub view_mode: ViewMode,
     pub navigation_items: Vec<NavigationItem>,
     pub traffic_history: HashMap<String, InterfaceHistory>,
+    pub whois_cache: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
+    pub details_scroll: u16,
 }
 
 impl Default for App {
@@ -55,6 +57,8 @@ impl Default for App {
             view_mode: ViewMode::Interface,
             navigation_items: Vec::new(),
             traffic_history: HashMap::new(),
+            whois_cache: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
+            details_scroll: 0,
         }
     }
 }
@@ -124,6 +128,7 @@ impl App {
         }
         let selected_name = self.selected_interface_name().map(str::to_owned);
         self.view_mode = mode;
+        self.details_scroll = 0;
         self.update_navigation_items();
         self.restore_selection(selected_name.as_deref());
     }
@@ -326,23 +331,38 @@ impl App {
       }
 
       pub fn select_next(&mut self) {
-          let len = self.navigation_items.len();
-          if len > 0 {
-              self.selected_index = (self.selected_index + 1) % len;
-          }
-      }
+        let len = self.navigation_items.len();
+        if len > 0 {
+            self.selected_index = (self.selected_index + 1) % len;
+            self.details_scroll = 0;
+        }
+    }
 
-      pub fn select_previous(&mut self) {
-          let len = self.navigation_items.len();
-          if len > 0 {
-              if self.selected_index == 0 {
-                  self.selected_index = len - 1;
-              } else {
-                  self.selected_index -= 1;
-              }
-          }
-      }
-  }
+    pub fn select_previous(&mut self) {
+        let len = self.navigation_items.len();
+        if len > 0 {
+            if self.selected_index == 0 {
+                self.selected_index = len - 1;
+            } else {
+                self.selected_index -= 1;
+            }
+            self.details_scroll = 0;
+        }
+    }
+
+    pub fn scroll_details_down(&mut self) {
+        self.details_scroll = self.details_scroll.saturating_add(1);
+    }
+
+    pub fn scroll_details_up(&mut self) {
+        self.details_scroll = self.details_scroll.saturating_sub(1);
+    }
+
+    pub fn get_whois_result(&self, ip: &str) -> Option<String> {
+        let lock = self.whois_cache.lock().ok()?;
+        lock.get(ip).cloned()
+    }
+}
 
   fn calculate_ipv4_subnet(ip: &Ipv4Addr, prefix_len: u8) -> Ipv4Addr {
       let ip_u32 = u32::from(*ip);

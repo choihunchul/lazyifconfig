@@ -190,7 +190,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     }
                 }
                 
-                let details_p = Paragraph::new(details_text).wrap(Wrap { trim: true });
+                let details_p = Paragraph::new(details_text)
+                    .wrap(Wrap { trim: true })
+                    .scroll((app.details_scroll, 0));
                 frame.render_widget(details_p, details_inner);
             }
             NavigationItem::Interface { name, .. } => {
@@ -233,7 +235,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
                             details_text.push_str("  No stats available\n");
                         }
 
-                        let details_p = Paragraph::new(details_text).wrap(Wrap { trim: true });
+                        let details_p = Paragraph::new(details_text)
+                            .wrap(Wrap { trim: true })
+                            .scroll((app.details_scroll, 0));
                         frame.render_widget(details_p, sub_chunks[0]);
 
                         // Render Charts
@@ -327,12 +331,26 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 
                 details_text.push_str(&format!("Associated Interface: {}\n", mapped_interface));
 
-                let details_p = Paragraph::new(details_text).wrap(Wrap { trim: true });
+                if foreign_ip != "*" && foreign_ip != "::" && foreign_ip != "0.0.0.0" && foreign_ip != "*.*" {
+                    details_text.push_str("\n[c: Copy IP | w: WHOIS Query]\n");
+                    if let Some(whois) = app.get_whois_result(foreign_ip) {
+                        details_text.push_str("\n=== Whois Information ===\n");
+                        details_text.push_str(&whois);
+                    } else {
+                        details_text.push_str("\nPress 'w' to fetch WHOIS information.\n");
+                    }
+                }
+
+                let details_p = Paragraph::new(details_text)
+                    .wrap(Wrap { trim: true })
+                    .scroll((app.details_scroll, 0));
                 frame.render_widget(details_p, details_inner);
             }
         }
     } else {
-        let details_p = Paragraph::new("No data collected yet. Press 'r' to refresh.").wrap(Wrap { trim: true });
+        let details_p = Paragraph::new("No data collected yet. Press 'r' to refresh.")
+            .wrap(Wrap { trim: true })
+            .scroll((app.details_scroll, 0));
         frame.render_widget(details_p, details_inner);
     }
 
@@ -348,10 +366,19 @@ pub fn draw(frame: &mut Frame, app: &App) {
     frame.render_widget(event_list, chunks[1]);
 
     // 4. Status Bar
-    let status_text = format!(
-        " q: Quit | r: Refresh | a: Toggle -a ({}) | i: Interface | n: Network | c: Connections | j/k: Nav ",
-        if app.show_all { "ON" } else { "OFF" }
-    );
+    let status_text = match app.view_mode {
+        ViewMode::Connections => {
+            format!(
+                " q: Quit | c: Copy IP | w: WHOIS | [/]: Scroll Details | i: Interface | n: Network | j/k: Nav "
+            )
+        }
+        _ => {
+            format!(
+                " q: Quit | r: Refresh | a: Toggle -a ({}) | i: Interface | n: Network | c: Connections | [/]: Scroll Details | j/k: Nav ",
+                if app.show_all { "ON" } else { "OFF" }
+            )
+        }
+    };
     let status_p = Paragraph::new(status_text)
         .style(Style::default().bg(Color::Blue).fg(Color::White));
     frame.render_widget(status_p, chunks[2]);
