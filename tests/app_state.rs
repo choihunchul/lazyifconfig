@@ -271,3 +271,54 @@ fn test_app_navigation() {
     assert_eq!(app.selected_index, 2);
 }
 
+#[test]
+fn test_app_network_view_grouping() {
+    let mut app = App::default();
+    let en0 = NetworkInterface {
+        name: "en0".to_string(),
+        network_kind: lazyifconfig::model::NetworkKind::Lan,
+        interface_type: lazyifconfig::model::InterfaceType::WifiOrEthernet,
+        status: lazyifconfig::model::InterfaceStatus::Up,
+        ipv4: vec![lazyifconfig::model::InterfaceAddress {
+            value: "192.168.0.15".to_string(),
+            prefix_len: Some(24),
+            gateway: None,
+        }],
+        ipv6: vec![],
+        mac_address: None,
+        mtu: None,
+        stats: None,
+    };
+    let lo0 = NetworkInterface {
+        name: "lo0".to_string(),
+        network_kind: lazyifconfig::model::NetworkKind::Loopback,
+        interface_type: lazyifconfig::model::InterfaceType::Loopback,
+        status: lazyifconfig::model::InterfaceStatus::Up,
+        ipv4: vec![lazyifconfig::model::InterfaceAddress {
+            value: "127.0.0.1".to_string(),
+            prefix_len: Some(8),
+            gateway: None,
+        }],
+        ipv6: vec![],
+        mac_address: None,
+        mtu: None,
+        stats: None,
+    };
+
+    app.replace_snapshot(lazyifconfig::model::NetworkSnapshot {
+        interfaces: vec![en0, lo0],
+        captured_at_secs: 100,
+    });
+
+    // 기본 뷰 모드는 Interface
+    assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Interface);
+
+    // 네트워크 뷰로 전환
+    app.set_view_mode(lazyifconfig::app::ViewMode::Network);
+    assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Network);
+
+    // navigation_items 검증: SubnetHeader(127.0.0.0/8) -> lo0 -> SubnetHeader(192.168.0.0/24) -> en0
+    assert!(matches!(app.navigation_items[0], lazyifconfig::app::NavigationItem::SubnetHeader(_)));
+    assert!(matches!(app.navigation_items[1], lazyifconfig::app::NavigationItem::Interface { .. }));
+}
+
