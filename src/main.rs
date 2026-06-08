@@ -7,9 +7,10 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use lazyifconfig::app::{App, ViewMode};
-use lazyifconfig::command::{run_ifconfig, run_netstat};
+use lazyifconfig::command::{run_ifconfig, run_netstat, run_netstat_an};
 use lazyifconfig::collector::interface::{parse_interfaces, merge_gateways};
 use lazyifconfig::collector::stats::merge_stats;
+use lazyifconfig::collector::connections::parse_connections;
 use lazyifconfig::model::NetworkSnapshot;
 
 pub fn tick_update(app: &mut App) -> Result<(), String> {
@@ -21,6 +22,12 @@ pub fn tick_update(app: &mut App) -> Result<(), String> {
     }
     
     let merged = merge_stats(&raw_out, parsed);
+
+    let connections = if let Ok(netstat_an_out) = run_netstat_an() {
+        parse_connections(&netstat_an_out)
+    } else {
+        Vec::new()
+    };
     
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -29,6 +36,7 @@ pub fn tick_update(app: &mut App) -> Result<(), String> {
 
     app.replace_snapshot(NetworkSnapshot {
         interfaces: merged,
+        connections,
         captured_at_secs: now,
     });
     Ok(())
@@ -79,6 +87,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     KeyCode::Char('n') | KeyCode::Char('ㅜ') => {
                         app.set_view_mode(ViewMode::Network);
+                    }
+                    KeyCode::Char('c') | KeyCode::Char('ㅊ') => {
+                        app.set_view_mode(ViewMode::Connections);
                     }
                     _ => {}
                 }

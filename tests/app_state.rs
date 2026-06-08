@@ -27,6 +27,7 @@ fn snapshot_can_hold_interfaces_and_events() {
 
     let snapshot = NetworkSnapshot {
         interfaces: vec![interface],
+        connections: vec![],
         captured_at_secs: 10,
     };
 
@@ -209,6 +210,7 @@ fn replace_snapshot_keeps_only_most_recent_fifty_events() {
 fn snapshot_with_interfaces(captured_at_secs: u64, interfaces: Vec<NetworkInterface>) -> NetworkSnapshot {
     NetworkSnapshot {
         interfaces,
+        connections: vec![],
         captured_at_secs,
     }
 }
@@ -254,6 +256,7 @@ fn test_app_navigation() {
             interface_with_stats("en0", None, None),
             interface_with_stats("utun0", None, None),
         ],
+        connections: vec![],
         captured_at_secs: 10,
     });
     assert_eq!(app.selected_index, 0);
@@ -307,6 +310,7 @@ fn test_app_network_view_grouping() {
 
     app.replace_snapshot(lazyifconfig::model::NetworkSnapshot {
         interfaces: vec![en0, lo0],
+        connections: vec![],
         captured_at_secs: 100,
     });
 
@@ -348,6 +352,7 @@ fn test_traffic_history_bounding_and_cleanup() {
 
         app.replace_snapshot(NetworkSnapshot {
             interfaces: vec![interface],
+            connections: vec![],
             captured_at_secs: idx as u64,
         });
     }
@@ -360,6 +365,7 @@ fn test_traffic_history_bounding_and_cleanup() {
 
     app.replace_snapshot(NetworkSnapshot {
         interfaces: vec![],
+        connections: vec![],
         captured_at_secs: 100,
     });
     assert!(app.traffic_history.get("en0").is_none());

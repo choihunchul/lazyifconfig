@@ -23,6 +23,19 @@ pub fn run_netstat() -> Result<String, String> {
     }
 }
 
+pub fn run_netstat_an() -> Result<String, String> {
+    use std::process::Command;
+    let mut cmd = Command::new("netstat");
+    cmd.arg("-an");
+    let output = cmd.output().map_err(|e| e.to_string())?;
+
+    if output.status.success() {
+        String::from_utf8(output.stdout).map_err(|e| e.to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -46,5 +59,13 @@ mod tests {
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(output.contains("Routing tables") || output.contains("default"));
+    }
+
+    #[test]
+    fn test_run_netstat_an_success() {
+        let result = run_netstat_an();
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(output.contains("tcp") || output.contains("udp") || output.contains("LISTEN") || output.contains("Local Address"));
     }
 }

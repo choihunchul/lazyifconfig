@@ -122,3 +122,38 @@ fn test_gateway_parsing() {
     lazyifconfig::collector::interface::merge_gateways(&mut interfaces2, netstat_input);
     assert_eq!(interfaces2[0].ipv4[0].gateway, Some("192.168.0.1".to_string()));
 }
+
+#[test]
+fn test_parse_connections() {
+    let input = "
+Active Internet connections (including servers)
+Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)
+tcp4       0      0  192.168.0.193.56780    211.242.12.227.995     ESTABLISHED
+tcp6       0      0  *.56642                *.*                    LISTEN
+udp4       0      0  *.5353                 *.*
+";
+    let connections = lazyifconfig::collector::connections::parse_connections(input);
+    assert_eq!(connections.len(), 3);
+
+    let c0 = &connections[0];
+    assert_eq!(c0.proto, "tcp4");
+    assert_eq!(c0.local_ip, "192.168.0.193");
+    assert_eq!(c0.local_port, "56780");
+    assert_eq!(c0.foreign_ip, "211.242.12.227");
+    assert_eq!(c0.foreign_port, "995");
+    assert_eq!(c0.state, Some("ESTABLISHED".to_string()));
+
+    let c1 = &connections[1];
+    assert_eq!(c1.proto, "tcp6");
+    assert_eq!(c1.local_ip, "*");
+    assert_eq!(c1.local_port, "56642");
+    assert_eq!(c1.state, Some("LISTEN".to_string()));
+
+    let c2 = &connections[2];
+    assert_eq!(c2.proto, "udp4");
+    assert_eq!(c2.local_ip, "*");
+    assert_eq!(c2.local_port, "5353");
+    assert_eq!(c2.foreign_ip, "*");
+    assert_eq!(c2.foreign_port, "*");
+    assert_eq!(c2.state, None);
+}

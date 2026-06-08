@@ -35,6 +35,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let title = match app.view_mode {
         ViewMode::Interface => " Interfaces ",
         ViewMode::Network => " Networks (Subnet View) ",
+        ViewMode::Connections => " Active Connections ",
     };
     let list_block = Block::default().borders(Borders::ALL).title(title);
     
@@ -93,6 +94,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     }
                 }
                 list_items.push(ListItem::new(display_text).style(final_style));
+            }
+            NavigationItem::Connection { proto, local, foreign, state, .. } => {
+                let state_str = state.as_ref().map(|s| format!(" ({})", s)).unwrap_or_default();
+                let text = format!("[{}] {} -> {}{}", proto.to_uppercase(), local, foreign, state_str);
+                list_items.push(ListItem::new(text).style(style));
             }
         }
     }
@@ -278,6 +284,52 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     }
                 }
             }
+            NavigationItem::Connection { proto, local, foreign, state, index: _ } => {
+                let mut details_text = String::new();
+                details_text.push_str("=== Active Connection Details ===\n\n");
+                details_text.push_str(&format!("Protocol:             {}\n", proto.to_uppercase()));
+                
+                let local_parts: Vec<&str> = local.split(':').collect();
+                let local_ip = local_parts[0];
+                let local_port = local_parts.get(1).unwrap_or(&"*");
+                
+                details_text.push_str(&format!("Local IP Address:     {}\n", local_ip));
+                details_text.push_str(&format!("Local Port:           {}\n", local_port));
+                
+                let foreign_parts: Vec<&str> = foreign.split(':').collect();
+                let foreign_ip = foreign_parts[0];
+                let foreign_port = foreign_parts.get(1).unwrap_or(&"*");
+                
+                details_text.push_str(&format!("Foreign IP Address:   {}\n", foreign_ip));
+                details_text.push_str(&format!("Foreign Port:         {}\n", foreign_port));
+                
+                if let Some(s) = state {
+                    details_text.push_str(&format!("TCP State:            {}\n", s));
+                }
+
+                // Map local IP to local interfaces
+                let mut mapped_interface = "N/A (External/Wildcard)".to_string();
+                if let Some(snapshot) = &app.current_snapshot {
+                    for interface in &snapshot.interfaces {
+                        let matches_ipv4 = interface.ipv4.iter().any(|addr| addr.value == local_ip);
+                        let matches_ipv6 = interface.ipv6.iter().any(|addr| addr.value == local_ip);
+                        if matches_ipv4 || matches_ipv6 {
+                            mapped_interface = format!("{} ({})", interface.name, interface.network_kind.as_str());
+                            break;
+                        }
+                    }
+                }
+                if local_ip == "127.0.0.1" || local_ip == "::1" || local_ip == "fe80::1%lo0" {
+                    mapped_interface = "lo0 (LOOPBACK)".to_string();
+                } else if local_ip == "*" || local_ip == "::" || local_ip == "0.0.0.0" {
+                    mapped_interface = "All Interfaces (Wildcard)".to_string();
+                }
+                
+                details_text.push_str(&format!("Associated Interface: {}\n", mapped_interface));
+
+                let details_p = Paragraph::new(details_text).wrap(Wrap { trim: true });
+                frame.render_widget(details_p, details_inner);
+            }
         }
     } else {
         let details_p = Paragraph::new("No data collected yet. Press 'r' to refresh.").wrap(Wrap { trim: true });
@@ -297,7 +349,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     // 4. Status Bar
     let status_text = format!(
-        " q: Quit | r: Refresh | a: Toggle -a ({}) | i: Interface View | n: Network View | j/k: Nav ",
+        " q: Quit | r: Refresh | a: Toggle -a ({}) | i: Interface | n: Network | c: Connections | j/k: Nav ",
         if app.show_all { "ON" } else { "OFF" }
     );
     let status_p = Paragraph::new(status_text)

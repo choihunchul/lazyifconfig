@@ -7,6 +7,7 @@ use crate::model::{NetworkEvent, NetworkInterface, NetworkSnapshot, Subnet};
 pub enum ViewMode {
     Interface,
     Network,
+    Connections,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -16,6 +17,13 @@ pub enum NavigationItem {
         associated_ip: Option<String>,
     },
     SubnetHeader(Subnet),
+    Connection {
+        proto: String,
+        local: String,
+        foreign: String,
+        state: Option<String>,
+        index: usize,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -106,6 +114,7 @@ impl App {
         match self.navigation_items.get(self.selected_index)? {
             NavigationItem::Interface { name, .. } => Some(name.as_str()),
             NavigationItem::SubnetHeader(_) => None,
+            NavigationItem::Connection { .. } => None,
         }
     }
 
@@ -213,6 +222,20 @@ impl App {
                     }
                 }
                 self.navigation_items = items;
+            }
+            ViewMode::Connections => {
+                self.navigation_items = snapshot
+                    .connections
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, c)| NavigationItem::Connection {
+                        proto: c.proto.clone(),
+                        local: format!("{}:{}", c.local_ip, c.local_port),
+                        foreign: format!("{}:{}", c.foreign_ip, c.foreign_port),
+                        state: c.state.clone(),
+                        index: idx,
+                    })
+                    .collect();
             }
         }
     }

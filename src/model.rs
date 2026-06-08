@@ -77,9 +77,20 @@ pub struct NetworkInterface {
     pub stats: Option<InterfaceStats>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActiveConnection {
+    pub proto: String,
+    pub local_ip: String,
+    pub local_port: String,
+    pub foreign_ip: String,
+    pub foreign_port: String,
+    pub state: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NetworkSnapshot {
     pub interfaces: Vec<NetworkInterface>,
+    pub connections: Vec<ActiveConnection>,
     pub captured_at_secs: u64,
 }
 
