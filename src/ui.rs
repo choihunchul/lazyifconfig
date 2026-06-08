@@ -1,7 +1,7 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Sparkline, Wrap},
     Frame,
 };
 use crate::app::{App, NavigationItem, ViewMode};
@@ -104,11 +104,13 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .borders(Borders::ALL)
         .title(" Details ");
     
-    let mut details_text = String::new();
+    let details_inner = details_block.inner(top_chunks[1]);
+    frame.render_widget(details_block, top_chunks[1]);
     
     if let Some(selected_item) = app.navigation_items.get(app.selected_index) {
         match selected_item {
             NavigationItem::SubnetHeader(subnet) => {
+                let mut details_text = String::new();
                 details_text.push_str("=== Subnet Information ===\n\n");
                 match subnet {
                     Subnet::Ipv4 { network, prefix_len } => {
@@ -181,10 +183,22 @@ pub fn draw(frame: &mut Frame, app: &App) {
                         }
                     }
                 }
+                
+                let details_p = Paragraph::new(details_text).wrap(Wrap { trim: true });
+                frame.render_widget(details_p, details_inner);
             }
             NavigationItem::Interface { name, .. } => {
                 if let Some(snapshot) = &app.current_snapshot {
                     if let Some(interface) = snapshot.interfaces.iter().find(|i| i.name == *name) {
+                        let sub_chunks = Layout::default()
+                            .direction(Direction::Vertical)
+                            .constraints([
+                                Constraint::Min(5),
+                                Constraint::Length(6),
+                            ])
+                            .split(details_inner);
+
+                        let mut details_text = String::new();
                         details_text.push_str(&format!("Name:           {}\n", interface.name));
                         details_text.push_str(&format!("Classification: {}\n", interface.network_kind.as_str()));
                         details_text.push_str(&format!("Status:         {}\n", match interface.status {
@@ -205,32 +219,70 @@ pub fn draw(frame: &mut Frame, app: &App) {
                             details_text.push_str(&format!("  - {} / {}{}\n", addr.value, addr.prefix_len.map(|p| p.to_string()).unwrap_or_else(|| "?".to_string()), gw_str));
                         }
 
-                        details_text.push_str("\nTraffic Statistics:\n");
+                        details_text.push_str("\nTraffic Cumulative Stats:\n");
                         if let Some(stats) = &interface.stats {
-                            details_text.push_str(&format!("  RX Packets: {}\n", stats.rx_packets));
-                            details_text.push_str(&format!("  TX Packets: {}\n", stats.tx_packets));
-                            details_text.push_str(&format!("  RX Bytes:   {}\n", stats.rx_bytes));
-                            details_text.push_str(&format!("  TX Bytes:   {}\n", stats.tx_bytes));
-                            if let Some((rx_rate, tx_rate)) = app.selected_rates() {
-                                details_text.push_str(&format!("  RX Rate:    {} B/s\n", rx_rate));
-                                details_text.push_str(&format!("  TX Rate:    {} B/s\n", tx_rate));
-                            } else {
-                                details_text.push_str("  RX Rate:    0 B/s (calculating...)\n");
-                                details_text.push_str("  TX Rate:    0 B/s (calculating...)\n");
-                            }
+                            details_text.push_str(&format!("  Packets: RX {} / TX {}\n", stats.rx_packets, stats.tx_packets));
+                            details_text.push_str(&format!("  Bytes:   RX {} / TX {}\n", stats.rx_bytes, stats.tx_bytes));
                         } else {
                             details_text.push_str("  No stats available\n");
                         }
+
+                        let details_p = Paragraph::new(details_text).wrap(Wrap { trim: true });
+                        frame.render_widget(details_p, sub_chunks[0]);
+
+                        // Render Charts
+                        let chart_chunks = Layout::default()
+                            .direction(Direction::Horizontal)
+                            .constraints([
+                                Constraint::Percentage(50),
+                                Constraint::Percentage(50),
+                            ])
+                            .split(sub_chunks[1]);
+
+                        let (rx_rate, tx_rate) = app.selected_rates().unwrap_or((0, 0));
+
+                        let mut rx_data = vec![0u64; 40];
+                        let mut tx_data = vec![0u64; 40];
+                        if let Some(history) = app.traffic_history.get(&interface.name) {
+                            let rx_len = history.rx_rates.len();
+                            let rx_start = 40_usize.saturating_sub(rx_len);
+                            for (i, &val) in history.rx_rates.iter().enumerate() {
+                                if rx_start + i < 40 {
+                                    rx_data[rx_start + i] = val;
+                                }
+                            }
+                            let tx_len = history.tx_rates.len();
+                            let tx_start = 40_usize.saturating_sub(tx_len);
+                            for (i, &val) in history.tx_rates.iter().enumerate() {
+                                if tx_start + i < 40 {
+                                    tx_data[tx_start + i] = val;
+                                }
+                            }
+                        }
+
+                        let rx_title = format!(" RX Rate: {} ", format_bps(rx_rate));
+                        let tx_title = format!(" TX Rate: {} ", format_bps(tx_rate));
+
+                        let rx_sparkline = Sparkline::default()
+                            .block(Block::default().borders(Borders::ALL).title(rx_title))
+                            .style(Style::default().fg(Color::Green))
+                            .data(&rx_data);
+
+                        let tx_sparkline = Sparkline::default()
+                            .block(Block::default().borders(Borders::ALL).title(tx_title))
+                            .style(Style::default().fg(Color::Yellow))
+                            .data(&tx_data);
+
+                        frame.render_widget(rx_sparkline, chart_chunks[0]);
+                        frame.render_widget(tx_sparkline, chart_chunks[1]);
                     }
                 }
             }
         }
     } else {
-        details_text.push_str("No data collected yet. Press 'r' to refresh.\n");
+        let details_p = Paragraph::new("No data collected yet. Press 'r' to refresh.").wrap(Wrap { trim: true });
+        frame.render_widget(details_p, details_inner);
     }
-
-    let details_p = Paragraph::new(details_text).block(details_block).wrap(Wrap { trim: true });
-    frame.render_widget(details_p, top_chunks[1]);
 
     // 3. Event Panel
     let event_block = Block::default()
@@ -295,6 +347,18 @@ fn calculate_ipv6_subnet_arr(ip: &std::net::Ipv6Addr, prefix_len: u8) -> std::ne
         subnet_octets[i] = octets[i] & mask_octets[i];
     }
     std::net::Ipv6Addr::from(subnet_octets)
+}
+
+fn format_bps(bytes_per_sec: u64) -> String {
+    if bytes_per_sec >= 1_000_000_000 {
+        format!("{:.1} GB/s", bytes_per_sec as f64 / 1_000_000_000.0)
+    } else if bytes_per_sec >= 1_000_000 {
+        format!("{:.1} MB/s", bytes_per_sec as f64 / 1_000_000.0)
+    } else if bytes_per_sec >= 1_000 {
+        format!("{:.1} KB/s", bytes_per_sec as f64 / 1_000.0)
+    } else {
+        format!("{} B/s", bytes_per_sec)
+    }
 }
 
 #[cfg(test)]

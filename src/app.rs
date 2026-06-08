@@ -18,6 +18,12 @@ pub enum NavigationItem {
     SubnetHeader(Subnet),
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InterfaceHistory {
+    pub rx_rates: Vec<u64>,
+    pub tx_rates: Vec<u64>,
+}
+
 #[derive(Clone, Debug)]
 pub struct App {
     pub current_snapshot: Option<NetworkSnapshot>,
@@ -27,6 +33,7 @@ pub struct App {
     pub show_all: bool,
     pub view_mode: ViewMode,
     pub navigation_items: Vec<NavigationItem>,
+    pub traffic_history: HashMap<String, InterfaceHistory>,
 }
 
 impl Default for App {
@@ -39,6 +46,7 @@ impl Default for App {
             show_all: false,
             view_mode: ViewMode::Interface,
             navigation_items: Vec::new(),
+            traffic_history: HashMap::new(),
         }
     }
 }
@@ -53,6 +61,40 @@ impl App {
 
         if let Some(previous) = self.current_snapshot.replace(snapshot) {
             self.previous_snapshot = Some(previous);
+        }
+
+        // Update traffic history
+        if let (Some(previous), Some(current)) = (&self.previous_snapshot, &self.current_snapshot) {
+            let elapsed = current.captured_at_secs.saturating_sub(previous.captured_at_secs);
+            if elapsed > 0 {
+                let previous_by_name = interfaces_by_name(&previous.interfaces);
+                for interface in &current.interfaces {
+                    if let Some(prev_if) = previous_by_name.get(interface.name.as_str()) {
+                        if let (Some(curr_stats), Some(prev_stats)) = (&interface.stats, &prev_if.stats) {
+                            let rx_rate = curr_stats.rx_bytes.saturating_sub(prev_stats.rx_bytes) / elapsed;
+                            let tx_rate = curr_stats.tx_bytes.saturating_sub(prev_stats.tx_bytes) / elapsed;
+
+                            let history = self.traffic_history.entry(interface.name.clone()).or_default();
+                            history.rx_rates.push(rx_rate);
+                            history.tx_rates.push(tx_rate);
+
+                            if history.rx_rates.len() > 40 {
+                                history.rx_rates.remove(0);
+                            }
+                            if history.tx_rates.len() > 40 {
+                                history.tx_rates.remove(0);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Clean up history for removed interfaces
+        if let Some(current) = &self.current_snapshot {
+            self.traffic_history.retain(|name, _| {
+                current.interfaces.iter().any(|i| i.name == *name)
+            });
         }
 
         self.push_generated_events();

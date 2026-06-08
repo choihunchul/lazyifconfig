@@ -322,3 +322,46 @@ fn test_app_network_view_grouping() {
     assert!(matches!(app.navigation_items[1], lazyifconfig::app::NavigationItem::Interface { .. }));
 }
 
+#[test]
+fn test_traffic_history_bounding_and_cleanup() {
+    let mut app = App::default();
+
+    for idx in 0..=50 {
+        let stats = Some(InterfaceStats {
+            rx_bytes: idx as u64 * 100,
+            tx_bytes: idx as u64 * 50,
+            rx_packets: 0,
+            tx_packets: 0,
+        });
+
+        let interface = NetworkInterface {
+            name: "en0".to_string(),
+            network_kind: lazyifconfig::model::NetworkKind::Lan,
+            interface_type: InterfaceType::WifiOrEthernet,
+            status: InterfaceStatus::Up,
+            ipv4: vec![],
+            ipv6: vec![],
+            mac_address: None,
+            mtu: None,
+            stats,
+        };
+
+        app.replace_snapshot(NetworkSnapshot {
+            interfaces: vec![interface],
+            captured_at_secs: idx as u64,
+        });
+    }
+
+    let history = app.traffic_history.get("en0").unwrap();
+    assert_eq!(history.rx_rates.len(), 40);
+    assert_eq!(history.tx_rates.len(), 40);
+    assert_eq!(history.rx_rates[0], 100);
+    assert_eq!(history.tx_rates[0], 50);
+
+    app.replace_snapshot(NetworkSnapshot {
+        interfaces: vec![],
+        captured_at_secs: 100,
+    });
+    assert!(app.traffic_history.get("en0").is_none());
+}
+
