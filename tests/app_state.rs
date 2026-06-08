@@ -8,6 +8,7 @@ use lazyifconfig::model::{
 fn snapshot_can_hold_interfaces_and_events() {
     let interface = NetworkInterface {
         name: "en0".to_string(),
+        network_kind: lazyifconfig::model::NetworkKind::Unknown,
         interface_type: InterfaceType::WifiOrEthernet,
         status: InterfaceStatus::Up,
         ipv4: vec![InterfaceAddress::new("192.168.0.10")],
@@ -228,6 +229,7 @@ fn interface_with_status(
 ) -> NetworkInterface {
     NetworkInterface {
         name: name.to_string(),
+        network_kind: lazyifconfig::model::NetworkKind::Unknown,
         interface_type: InterfaceType::WifiOrEthernet,
         status,
         ipv4: ipv4.into_iter().map(InterfaceAddress::new).collect(),

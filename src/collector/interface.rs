@@ -1,5 +1,5 @@
 use crate::model::{
-    InterfaceAddress, InterfaceStatus, InterfaceType, NetworkInterface,
+    InterfaceAddress, InterfaceStatus, InterfaceType, NetworkInterface, NetworkKind,
 };
 
 pub fn parse_interfaces(input: &str) -> Vec<NetworkInterface> {
@@ -15,6 +15,7 @@ pub fn parse_interfaces(input: &str) -> Vec<NetworkInterface> {
             let name = line.split(':').next().unwrap_or_default().to_string();
             current = Some(NetworkInterface {
                 interface_type: infer_interface_type(&name),
+                network_kind: NetworkKind::Unknown,
                 status: parse_header_status(line),
                 mtu: parse_mtu(line),
                 name,
