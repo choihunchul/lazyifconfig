@@ -1,3 +1,97 @@
-fn main() {
-    println!("{}", lazyifconfig::ui::render_title());
+use std::io;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use crossterm::{
+    event::{self, Event, KeyCode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{backend::CrosstermBackend, Terminal};
+use lazyifconfig::app::App;
+use lazyifconfig::command::run_ifconfig;
+use lazyifconfig::collector::interface::parse_interfaces;
+use lazyifconfig::collector::stats::merge_stats;
+use lazyifconfig::model::NetworkSnapshot;
+
+pub fn tick_update(app: &mut App) -> Result<(), String> {
+    let raw_out = run_ifconfig()?;
+    let parsed = parse_interfaces(&raw_out);
+    let merged = merge_stats(&raw_out, parsed);
+    
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    app.replace_snapshot(NetworkSnapshot {
+        interfaces: merged,
+        captured_at_secs: now,
+    });
+    Ok(())
 }
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut app = App::default();
+    let _ = tick_update(&mut app);
+
+    let mut last_tick = std::time::Instant::now();
+    let tick_rate = Duration::from_secs(2);
+
+    loop {
+        terminal.draw(|f| lazyifconfig::ui::draw(f, &app))?;
+
+        let timeout = tick_rate
+            .checked_sub(last_tick.elapsed())
+            .unwrap_or(Duration::from_secs(0));
+
+        if event::poll(timeout)? {
+            if let Event::Key(key) = event::read()? {
+                match key.code {
+                    KeyCode::Char('q') => break,
+                    KeyCode::Char('r') => {
+                        let _ = tick_update(&mut app);
+                        last_tick = std::time::Instant::now();
+                    }
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        app.select_next();
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        app.select_previous();
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if last_tick.elapsed() >= tick_rate {
+            let _ = tick_update(&mut app);
+            last_tick = std::time::Instant::now();
+        }
+    }
+
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tick_update() {
+        let mut app = App::default();
+        let res = tick_update(&mut app);
+        assert!(res.is_ok());
+        assert!(app.current_snapshot.is_some());
+    }
+}
+
