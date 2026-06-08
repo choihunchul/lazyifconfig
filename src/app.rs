@@ -151,6 +151,28 @@ impl App {
             self.selected_index = len - 1;
         }
     }
+
+    pub fn select_next(&mut self) {
+        if let Some(snapshot) = &self.current_snapshot {
+            let len = snapshot.interfaces.len();
+            if len > 0 {
+                self.selected_index = (self.selected_index + 1) % len;
+            }
+        }
+    }
+
+    pub fn select_previous(&mut self) {
+        if let Some(snapshot) = &self.current_snapshot {
+            let len = snapshot.interfaces.len();
+            if len > 0 {
+                if self.selected_index == 0 {
+                    self.selected_index = len - 1;
+                } else {
+                    self.selected_index -= 1;
+                }
+            }
+        }
+    }
 }
 
 fn interfaces_by_name<'a>(

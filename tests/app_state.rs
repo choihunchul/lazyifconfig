@@ -241,3 +241,30 @@ fn interface_with_status(
         }),
     }
 }
+
+#[test]
+fn test_app_navigation() {
+    let mut app = App::default();
+    app.replace_snapshot(NetworkSnapshot {
+        interfaces: vec![
+            interface_with_stats("lo0", None, None),
+            interface_with_stats("en0", None, None),
+            interface_with_stats("utun0", None, None),
+        ],
+        captured_at_secs: 10,
+    });
+    assert_eq!(app.selected_index, 0);
+
+    app.select_next();
+    assert_eq!(app.selected_index, 1);
+
+    app.select_next();
+    assert_eq!(app.selected_index, 2);
+
+    app.select_next();
+    assert_eq!(app.selected_index, 0);
+
+    app.select_previous();
+    assert_eq!(app.selected_index, 2);
+}
+
