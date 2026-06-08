@@ -122,11 +122,11 @@ pub struct NetworkInterface {
 ```
 
 #### [Subnet] (신규 - `src/model.rs`)
-서브넷 그룹을 식별하고 정렬하기 위해 `Subnet` 열거형을 새로 정의합니다.
+서브넷 그룹을 식별하고 정렬하기 위해 `Subnet` 열거형을 새로 정의합니다. 정렬 규칙(`IPv4` → `IPv6` → `Unassigned`)의 명시적인 제어와 유지보수 편의를 위해 `Ord` 및 `PartialOrd` 트레이트를 직접 구현(Manual Implementation)합니다.
 
 ```rust
 // src/model.rs
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Subnet {
     Ipv4 {
         network: std::net::Ipv4Addr,
@@ -138,16 +138,44 @@ pub enum Subnet {
     },
     Unassigned,
 }
+
+impl Ord for Subnet {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match (self, other) {
+            (Subnet::Ipv4 { network: n1, prefix_len: p1 }, Subnet::Ipv4 { network: n2, prefix_len: p2 }) => {
+                n1.cmp(n2).then(p1.cmp(p2))
+            }
+            (Subnet::Ipv6 { network: n1, prefix_len: p1 }, Subnet::Ipv6 { network: n2, prefix_len: p2 }) => {
+                n1.cmp(n2).then(p1.cmp(p2))
+            }
+            (Subnet::Unassigned, Subnet::Unassigned) => Ordering::Equal,
+            (Subnet::Ipv4 { .. }, _) => Ordering::Less,
+            (_, Subnet::Ipv4 { .. }) => Ordering::Greater,
+            (Subnet::Ipv6 { .. }, _) => Ordering::Less,
+            (_, Subnet::Ipv6 { .. }) => Ordering::Greater,
+        }
+    }
+}
+
+impl PartialOrd for Subnet {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
 ```
 
 #### [NavigationItem] (신규 - `src/app.rs`)
-탐색 인덱스가 가리킬 수 있는 대상을 단일화하기 위해 `NavigationItem` 열거형을 정의합니다.
+탐색 인덱스가 가리킬 수 있는 대상을 단일화하기 위해 `NavigationItem` 열거형을 정의합니다. `associated_ip`는 Unassigned 인터페이스나 IP 주소가 없는 상황을 위해 `Option<String>` 타입으로 설계합니다.
 
 ```rust
 // src/app.rs
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NavigationItem {
-    Interface { name: String, associated_ip: String },
+    Interface {
+        name: String,
+        associated_ip: Option<String>,
+    },
     SubnetHeader(Subnet),
 }
 ```
