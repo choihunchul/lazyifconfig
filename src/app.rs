@@ -1,13 +1,16 @@
 use std::collections::{BTreeMap, HashMap};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
-use crate::model::{NetworkEvent, NetworkInterface, NetworkSnapshot, Subnet};
+use crate::model::{NetworkEvent, NetworkInterface, NetworkSnapshot, Subnet, PublicIpInfo, CommandSourceId, CommandOutput};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewMode {
     Interface,
     Network,
     Connections,
+    Ports,
+    Timeline,
+    Routes,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,6 +25,26 @@ pub enum NavigationItem {
         local: String,
         foreign: String,
         state: Option<String>,
+        index: usize,
+    },
+    ListeningPort {
+        proto: String,
+        port: String,
+        command: String,
+        pid: String,
+        user: String,
+        index: usize,
+    },
+    Event {
+        index: usize,
+        kind: crate::model::NetworkEventKind,
+        timestamp: std::time::SystemTime,
+        message: String,
+    },
+    Route {
+        destination: String,
+        gateway: String,
+        interface: String,
         index: usize,
     },
 }
@@ -44,6 +67,32 @@ pub struct App {
     pub traffic_history: HashMap<String, InterfaceHistory>,
     pub whois_cache: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
     pub details_scroll: u16,
+    pub port_filter: String,
+    pub port_filter_active: bool,
+    pub public_ip_info: std::sync::Arc<std::sync::Mutex<Option<PublicIpInfo>>>,
+    pub current_public_ip_info: Option<PublicIpInfo>,
+    pub last_public_ip_fetch: Option<std::time::Instant>,
+    pub command_outputs: HashMap<CommandSourceId, CommandOutput>,
+    pub raw_viewer: RawViewerState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SearchMatch {
+    pub line_index: usize,
+    pub start_byte: usize,
+    pub end_byte: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct RawViewerState {
+    pub active: bool,
+    pub sources: Vec<CommandSourceId>,
+    pub selected_index: usize,
+    pub scroll: u16,
+    pub search_query: String,
+    pub search_active: bool,
+    pub search_matches: Vec<SearchMatch>,
+    pub current_match_index: usize,
 }
 
 impl Default for App {
@@ -59,6 +108,13 @@ impl Default for App {
             traffic_history: HashMap::new(),
             whois_cache: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
             details_scroll: 0,
+            port_filter: String::new(),
+            port_filter_active: false,
+            public_ip_info: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            current_public_ip_info: None,
+            last_public_ip_fetch: None,
+            command_outputs: HashMap::new(),
+            raw_viewer: RawViewerState::default(),
         }
     }
 }
@@ -119,6 +175,9 @@ impl App {
             NavigationItem::Interface { name, .. } => Some(name.as_str()),
             NavigationItem::SubnetHeader(_) => None,
             NavigationItem::Connection { .. } => None,
+            NavigationItem::ListeningPort { .. } => None,
+            NavigationItem::Event { .. } => None,
+            NavigationItem::Route { .. } => None,
         }
     }
 
@@ -129,8 +188,43 @@ impl App {
         let selected_name = self.selected_interface_name().map(str::to_owned);
         self.view_mode = mode;
         self.details_scroll = 0;
+        self.port_filter.clear();
+        self.port_filter_active = false;
         self.update_navigation_items();
         self.restore_selection(selected_name.as_deref());
+    }
+
+    pub fn update_raw_viewer_search_matches(&mut self) {
+        self.raw_viewer.search_matches.clear();
+        self.raw_viewer.current_match_index = 0;
+        
+        if self.raw_viewer.search_query.is_empty() {
+            return;
+        }
+
+        let source_id = match self.raw_viewer.sources.get(self.raw_viewer.selected_index) {
+            Some(id) => *id,
+            None => return,
+        };
+
+        if let Some(output) = self.command_outputs.get(&source_id) {
+            let text = format!("{}\n{}", output.stdout, output.stderr);
+            let query = self.raw_viewer.search_query.to_lowercase();
+            for (line_idx, line) in text.lines().enumerate() {
+                let line_lower = line.to_lowercase();
+                let mut start_pos = 0;
+                while let Some(pos) = line_lower[start_pos..].find(&query) {
+                    let absolute_start = start_pos + pos;
+                    let absolute_end = absolute_start + query.len();
+                    self.raw_viewer.search_matches.push(SearchMatch {
+                        line_index: line_idx,
+                        start_byte: absolute_start,
+                        end_byte: absolute_end,
+                    });
+                    start_pos = absolute_end;
+                }
+            }
+        }
     }
 
     pub fn selected_rates(&self) -> Option<(u64, u64)> {
@@ -155,13 +249,16 @@ impl App {
     }
 
     pub fn update_navigation_items(&mut self) {
-        let Some(snapshot) = &self.current_snapshot else {
+        if self.view_mode != ViewMode::Timeline && self.current_snapshot.is_none() {
             self.navigation_items = Vec::new();
             return;
-        };
+        }
+
+        let snapshot = self.current_snapshot.as_ref();
 
         match self.view_mode {
             ViewMode::Interface => {
+                let snapshot = snapshot.unwrap();
                 self.navigation_items = snapshot
                     .interfaces
                     .iter()
@@ -172,6 +269,7 @@ impl App {
                     .collect();
             }
             ViewMode::Network => {
+                let snapshot = snapshot.unwrap();
                 let mut groups: BTreeMap<Subnet, Vec<(String, Option<String>)>> = BTreeMap::new();
 
                 for interface in &snapshot.interfaces {
@@ -229,6 +327,7 @@ impl App {
                 self.navigation_items = items;
             }
             ViewMode::Connections => {
+                let snapshot = snapshot.unwrap();
                 self.navigation_items = snapshot
                     .connections
                     .iter()
@@ -242,10 +341,66 @@ impl App {
                     })
                     .collect();
             }
+            ViewMode::Ports => {
+                let snapshot = snapshot.unwrap();
+                let query = self.port_filter.to_lowercase();
+                self.navigation_items = snapshot
+                    .listening_ports
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| {
+                        if query.is_empty() {
+                            true
+                        } else {
+                            p.local_port.contains(&query)
+                                || p.command.to_lowercase().contains(&query)
+                                || p.pid.contains(&query)
+                                || p.proto.to_lowercase().contains(&query)
+                        }
+                    })
+                    .map(|(idx, p)| NavigationItem::ListeningPort {
+                        proto: p.proto.clone(),
+                        port: p.local_port.clone(),
+                        command: p.command.clone(),
+                        pid: p.pid.clone(),
+                        user: p.user.clone(),
+                        index: idx,
+                    })
+                    .collect();
+            }
+            ViewMode::Timeline => {
+                self.navigation_items = self
+                    .recent_events
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, e)| NavigationItem::Event {
+                        index: idx,
+                        kind: e.kind,
+                        timestamp: e.timestamp,
+                        message: e.message.clone(),
+                    })
+                    .collect();
+            }
+            ViewMode::Routes => {
+                let snapshot = snapshot.unwrap();
+                self.navigation_items = snapshot
+                    .routes
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, r)| NavigationItem::Route {
+                        destination: r.destination.clone(),
+                        gateway: r.gateway.clone(),
+                        interface: r.interface.clone(),
+                        index: idx,
+                    })
+                    .collect();
+            }
         }
     }
 
     fn push_generated_events(&mut self) {
+        use crate::model::{EventSeverity, NetworkEventKind};
+
         let Some(current) = self.current_snapshot.as_ref() else {
             return;
         };
@@ -258,55 +413,181 @@ impl App {
 
             for interface in &current.interfaces {
                 match previous_by_name.get(interface.name.as_str()) {
-                    None => new_events.push(NetworkEvent::new(
-                        format!("{} appeared", interface.name),
-                        current.captured_at_secs,
-                    )),
-                    Some(previous_interface) => {
-                        if previous_interface.status != interface.status {
+                    None => {
+                        // Interface Appeared
+                        match interface.network_kind {
+                            crate::model::NetworkKind::Vpn => {
+                                new_events.push(NetworkEvent::new(
+                                    NetworkEventKind::VpnConnected,
+                                    EventSeverity::Info,
+                                    format!("{} connected (VPN appeared)", interface.name),
+                                ));
+                            }
+                            crate::model::NetworkKind::Container => {
+                                new_events.push(NetworkEvent::new(
+                                    NetworkEventKind::ContainerNetworkAppeared,
+                                    EventSeverity::Info,
+                                    format!("{} appeared (Docker/Bridge)", interface.name),
+                                ));
+                            }
+                            _ => {
+                                new_events.push(NetworkEvent::new(
+                                    NetworkEventKind::InterfaceAppeared,
+                                    EventSeverity::Info,
+                                    format!("{} appeared", interface.name),
+                                ));
+                            }
+                        }
+                        // Initial IPs as added
+                        for addr in &interface.ipv4 {
                             new_events.push(NetworkEvent::new(
-                                format!(
+                                NetworkEventKind::Ipv4Added,
+                                EventSeverity::Info,
+                                format!("{}: added IPv4 {}", interface.name, addr.value),
+                            ));
+                        }
+                        for addr in &interface.ipv6 {
+                            new_events.push(NetworkEvent::new(
+                                NetworkEventKind::Ipv6Added,
+                                EventSeverity::Info,
+                                format!("{}: added IPv6 {}", interface.name, addr.value),
+                            ));
+                        }
+                    }
+                    Some(previous_interface) => {
+                        // Check status change
+                        if previous_interface.status != interface.status {
+                            let (kind, severity) = match interface.status {
+                                crate::model::InterfaceStatus::Up => {
+                                    match interface.network_kind {
+                                        crate::model::NetworkKind::Vpn => (NetworkEventKind::VpnConnected, EventSeverity::Info),
+                                        crate::model::NetworkKind::Container => (NetworkEventKind::ContainerNetworkAppeared, EventSeverity::Info),
+                                        _ => (NetworkEventKind::InterfaceUp, EventSeverity::Info),
+                                    }
+                                }
+                                crate::model::InterfaceStatus::Down => {
+                                    match interface.network_kind {
+                                        crate::model::NetworkKind::Vpn => (NetworkEventKind::VpnDisconnected, EventSeverity::Warning),
+                                        crate::model::NetworkKind::Container => (NetworkEventKind::ContainerNetworkRemoved, EventSeverity::Info),
+                                        _ => (NetworkEventKind::InterfaceDown, EventSeverity::Warning),
+                                    }
+                                }
+                            };
+                            let msg = match kind {
+                                NetworkEventKind::VpnConnected => format!("{} connected", interface.name),
+                                NetworkEventKind::VpnDisconnected => format!("{} disconnected", interface.name),
+                                NetworkEventKind::ContainerNetworkAppeared => format!("{} appeared", interface.name),
+                                NetworkEventKind::ContainerNetworkRemoved => format!("{} removed", interface.name),
+                                _ => format!(
                                     "{} status changed: {} -> {}",
                                     interface.name,
                                     status_label(&previous_interface.status),
                                     status_label(&interface.status)
                                 ),
-                                current.captured_at_secs,
-                            ));
+                            };
+                            new_events.push(NetworkEvent::new(kind, severity, msg));
                         }
 
-                        let before = first_ipv4(previous_interface);
-                        let after = first_ipv4(interface);
+                        // IPv4 Address changes
+                        let prev_v4: Vec<String> = previous_interface.ipv4.iter().map(|a| a.value.clone()).collect();
+                        let curr_v4: Vec<String> = interface.ipv4.iter().map(|a| a.value.clone()).collect();
+                        if prev_v4.len() == 1 && curr_v4.len() == 1 && prev_v4[0] != curr_v4[0] {
+                            new_events.push(NetworkEvent::new(
+                                NetworkEventKind::Ipv4Changed,
+                                EventSeverity::Info,
+                                format!("{}: {} -> {}", interface.name, prev_v4[0], curr_v4[0]),
+                            ));
+                        } else {
+                            for ip in &curr_v4 {
+                                if !prev_v4.contains(ip) {
+                                    new_events.push(NetworkEvent::new(
+                                        NetworkEventKind::Ipv4Added,
+                                        EventSeverity::Info,
+                                        format!("{}: added IPv4 {}", interface.name, ip),
+                                    ));
+                                }
+                            }
+                            for ip in &prev_v4 {
+                                if !curr_v4.contains(ip) {
+                                    new_events.push(NetworkEvent::new(
+                                        NetworkEventKind::Ipv4Removed,
+                                        EventSeverity::Info,
+                                        format!("{}: removed IPv4 {}", interface.name, ip),
+                                    ));
+                                }
+                            }
+                        }
 
-                        if before != after {
-                            if let (Some(before), Some(after)) = (before, after) {
-                                new_events.push(NetworkEvent::new(
-                                    format!("{} IPv4 changed: {} -> {}", interface.name, before, after),
-                                    current.captured_at_secs,
-                                ));
-                              }
-                          }
-                      }
-                  }
-              }
+                        // IPv6 Address changes
+                        let prev_v6: Vec<String> = previous_interface.ipv6.iter().map(|a| a.value.clone()).collect();
+                        let curr_v6: Vec<String> = interface.ipv6.iter().map(|a| a.value.clone()).collect();
+                        if prev_v6.len() == 1 && curr_v6.len() == 1 && prev_v6[0] != curr_v6[0] {
+                            new_events.push(NetworkEvent::new(
+                                NetworkEventKind::Ipv6Changed,
+                                EventSeverity::Info,
+                                format!("{}: {} -> {}", interface.name, prev_v6[0], curr_v6[0]),
+                            ));
+                        } else {
+                            for ip in &curr_v6 {
+                                if !prev_v6.contains(ip) {
+                                    new_events.push(NetworkEvent::new(
+                                        NetworkEventKind::Ipv6Added,
+                                        EventSeverity::Info,
+                                        format!("{}: added IPv6 {}", interface.name, ip),
+                                    ));
+                                }
+                            }
+                            for ip in &prev_v6 {
+                                if !curr_v6.contains(ip) {
+                                    new_events.push(NetworkEvent::new(
+                                        NetworkEventKind::Ipv6Removed,
+                                        EventSeverity::Info,
+                                        format!("{}: removed IPv6 {}", interface.name, ip),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
-              for interface in &previous.interfaces {
-                  if !current_by_name.contains_key(interface.name.as_str()) {
-                      new_events.push(NetworkEvent::new(
-                          format!("{} disappeared", interface.name),
-                          current.captured_at_secs,
-                      ));
-                  }
-              }
-          }
+            for interface in &previous.interfaces {
+                if !current_by_name.contains_key(interface.name.as_str()) {
+                    // Interface Removed
+                    match interface.network_kind {
+                        crate::model::NetworkKind::Vpn => {
+                            new_events.push(NetworkEvent::new(
+                                NetworkEventKind::VpnDisconnected,
+                                EventSeverity::Warning,
+                                format!("{} disconnected (VPN disappeared)", interface.name),
+                            ));
+                        }
+                        crate::model::NetworkKind::Container => {
+                            new_events.push(NetworkEvent::new(
+                                NetworkEventKind::ContainerNetworkRemoved,
+                                EventSeverity::Info,
+                                format!("{} removed (Docker/Bridge)", interface.name),
+                            ));
+                        }
+                        _ => {
+                            new_events.push(NetworkEvent::new(
+                                NetworkEventKind::InterfaceRemoved,
+                                EventSeverity::Warning,
+                                format!("{} disappeared", interface.name),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
 
-          self.recent_events.extend(new_events);
+        self.recent_events.extend(new_events);
 
-          if self.recent_events.len() > 50 {
-              let overflow = self.recent_events.len() - 50;
-              self.recent_events.drain(0..overflow);
-          }
-      }
+        if self.recent_events.len() > 100 {
+            let overflow = self.recent_events.len() - 100;
+            self.recent_events.drain(0..overflow);
+        }
+    }
 
       fn restore_selection(&mut self, selected_name: Option<&str>) {
           let len = self.navigation_items.len();
@@ -406,9 +687,6 @@ impl App {
           .collect()
   }
 
-  fn first_ipv4(interface: &NetworkInterface) -> Option<&str> {
-      interface.ipv4.first().map(|address| address.value.as_str())
-  }
 
   fn status_label(status: &crate::model::InterfaceStatus) -> &'static str {
       match status {

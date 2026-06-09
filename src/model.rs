@@ -87,24 +87,122 @@ pub struct ActiveConnection {
     pub state: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListeningPort {
+    pub proto: String,
+    pub local_ip: String,
+    pub local_port: String,
+    pub pid: String,
+    pub command: String,
+    pub user: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteEntry {
+    pub destination: String,
+    pub gateway: String,
+    pub interface: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublicIpInfo {
+    pub ip: String,
+    pub provider: Option<String>,
+    pub country: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NetworkSnapshot {
     pub interfaces: Vec<NetworkInterface>,
     pub connections: Vec<ActiveConnection>,
+    pub listening_ports: Vec<ListeningPort>,
+    pub routes: Vec<RouteEntry>,
     pub captured_at_secs: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EventSeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+impl EventSeverity {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EventSeverity::Info => "INFO",
+            EventSeverity::Warning => "WARNING",
+            EventSeverity::Error => "ERROR",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NetworkEventKind {
+    InterfaceAppeared,
+    InterfaceRemoved,
+    InterfaceUp,
+    InterfaceDown,
+    Ipv4Added,
+    Ipv4Removed,
+    Ipv4Changed,
+    Ipv6Added,
+    Ipv6Removed,
+    Ipv6Changed,
+    VpnConnected,
+    VpnDisconnected,
+    ContainerNetworkAppeared,
+    ContainerNetworkRemoved,
+    ProcessKilled,
+    ActionCopied,
+    ActionWhois,
+    SystemError,
+    PublicIpChanged,
+    ProviderChanged,
+}
+
+impl NetworkEventKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            NetworkEventKind::InterfaceAppeared => "Interface Appeared",
+            NetworkEventKind::InterfaceRemoved => "Interface Removed",
+            NetworkEventKind::InterfaceUp => "Interface Up",
+            NetworkEventKind::InterfaceDown => "Interface Down",
+            NetworkEventKind::Ipv4Added => "IPv4 Added",
+            NetworkEventKind::Ipv4Removed => "IPv4 Removed",
+            NetworkEventKind::Ipv4Changed => "IPv4 Changed",
+            NetworkEventKind::Ipv6Added => "IPv6 Added",
+            NetworkEventKind::Ipv6Removed => "IPv6 Removed",
+            NetworkEventKind::Ipv6Changed => "IPv6 Changed",
+            NetworkEventKind::VpnConnected => "VPN Connected",
+            NetworkEventKind::VpnDisconnected => "VPN Disconnected",
+            NetworkEventKind::ContainerNetworkAppeared => "Container Network Appeared",
+            NetworkEventKind::ContainerNetworkRemoved => "Container Network Removed",
+            NetworkEventKind::ProcessKilled => "Process Killed",
+            NetworkEventKind::ActionCopied => "Copied to Clipboard",
+            NetworkEventKind::ActionWhois => "WHOIS Lookup",
+            NetworkEventKind::SystemError => "System Error",
+            NetworkEventKind::PublicIpChanged => "Public IP Changed",
+            NetworkEventKind::ProviderChanged => "Provider Changed",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NetworkEvent {
+    pub timestamp: std::time::SystemTime,
+    pub severity: EventSeverity,
+    pub kind: NetworkEventKind,
     pub message: String,
-    pub captured_at_secs: u64,
 }
 
 impl NetworkEvent {
-    pub fn new(message: String, captured_at_secs: u64) -> Self {
+    pub fn new(kind: NetworkEventKind, severity: EventSeverity, message: String) -> Self {
         Self {
+            timestamp: std::time::SystemTime::now(),
+            severity,
+            kind,
             message,
-            captured_at_secs,
         }
     }
 }
@@ -145,4 +243,38 @@ impl PartialOrd for Subnet {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CommandSourceId {
+    Ifconfig,
+    NetstatRoutes,
+    DefaultRoute,
+    NetstatConnections,
+    LsofPorts,
+    PublicIp,
+    Arp,
+}
+
+impl CommandSourceId {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CommandSourceId::Ifconfig => "ifconfig",
+            CommandSourceId::NetstatRoutes => "netstat -rn",
+            CommandSourceId::DefaultRoute => "route -n get default",
+            CommandSourceId::NetstatConnections => "netstat -an",
+            CommandSourceId::LsofPorts => "lsof -iTCP -sTCP:LISTEN -P -n",
+            CommandSourceId::PublicIp => "curl -s -m 5 https://ipinfo.io/json",
+            CommandSourceId::Arp => "arp -a",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct CommandOutput {
+    pub command: String,
+    pub stdout: String,
+    pub stderr: String,
+    pub executed_at: std::time::SystemTime,
+    pub exit_code: Option<i32>,
 }
