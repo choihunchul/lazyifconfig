@@ -221,6 +221,105 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
+                // --- Raw viewer mode: intercept all input ---
+                if app.raw_viewer.active {
+                    if app.raw_viewer.search_active {
+                        match key.code {
+                            KeyCode::Esc => {
+                                app.raw_viewer.search_active = false;
+                            }
+                            KeyCode::Enter => {
+                                app.raw_viewer.search_active = false;
+                                if !app.raw_viewer.search_matches.is_empty() {
+                                    app.raw_viewer.scroll = app.raw_viewer.search_matches[0].line_index as u16;
+                                }
+                            }
+                            KeyCode::Backspace => {
+                                app.raw_viewer.search_query.pop();
+                                app.update_raw_viewer_search_matches();
+                            }
+                            KeyCode::Char(c) => {
+                                app.raw_viewer.search_query.push(c);
+                                app.update_raw_viewer_search_matches();
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('o') | KeyCode::Char('ㅐ') => {
+                                app.raw_viewer.active = false;
+                            }
+                            KeyCode::Tab => {
+                                app.raw_viewer.selected_index = (app.raw_viewer.selected_index + 1) % app.raw_viewer.sources.len();
+                                app.raw_viewer.scroll = 0;
+                                app.update_raw_viewer_search_matches();
+                            }
+                            KeyCode::BackTab => {
+                                app.raw_viewer.selected_index = (app.raw_viewer.selected_index + app.raw_viewer.sources.len() - 1) % app.raw_viewer.sources.len();
+                                app.raw_viewer.scroll = 0;
+                                app.update_raw_viewer_search_matches();
+                            }
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                app.raw_viewer.scroll = app.raw_viewer.scroll.saturating_add(1);
+                            }
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                app.raw_viewer.scroll = app.raw_viewer.scroll.saturating_sub(1);
+                            }
+                            KeyCode::PageDown => {
+                                app.raw_viewer.scroll = app.raw_viewer.scroll.saturating_add(15);
+                            }
+                            KeyCode::PageUp => {
+                                app.raw_viewer.scroll = app.raw_viewer.scroll.saturating_sub(15);
+                            }
+                            KeyCode::Home => {
+                                app.raw_viewer.scroll = 0;
+                            }
+                            KeyCode::Char('/') => {
+                                app.raw_viewer.search_active = true;
+                                app.raw_viewer.search_query.clear();
+                                app.raw_viewer.search_matches.clear();
+                            }
+                            KeyCode::Char('n') => {
+                                if !app.raw_viewer.search_matches.is_empty() {
+                                    app.raw_viewer.current_match_index = (app.raw_viewer.current_match_index + 1) % app.raw_viewer.search_matches.len();
+                                    app.raw_viewer.scroll = app.raw_viewer.search_matches[app.raw_viewer.current_match_index].line_index as u16;
+                                }
+                            }
+                            KeyCode::Char('N') => {
+                                if !app.raw_viewer.search_matches.is_empty() {
+                                    app.raw_viewer.current_match_index = (app.raw_viewer.current_match_index + app.raw_viewer.search_matches.len() - 1) % app.raw_viewer.search_matches.len();
+                                    app.raw_viewer.scroll = app.raw_viewer.search_matches[app.raw_viewer.current_match_index].line_index as u16;
+                                }
+                            }
+                            KeyCode::Char('y') => {
+                                if let Some(&src_id) = app.raw_viewer.sources.get(app.raw_viewer.selected_index) {
+                                    let _ = lazyifconfig::command::copy_to_clipboard(src_id.as_str());
+                                    app.recent_events.push(NetworkEvent::new(
+                                        NetworkEventKind::ActionCopied,
+                                        EventSeverity::Info,
+                                        format!("Copied command: {}", src_id.as_str()),
+                                    ));
+                                }
+                            }
+                            KeyCode::Char('Y') => {
+                                if let Some(&src_id) = app.raw_viewer.sources.get(app.raw_viewer.selected_index) {
+                                    if let Some(out) = app.command_outputs.get(&src_id) {
+                                        let text = format!("{}\n{}", out.stdout, out.stderr);
+                                        let _ = lazyifconfig::command::copy_to_clipboard(&text);
+                                        app.recent_events.push(NetworkEvent::new(
+                                            NetworkEventKind::ActionCopied,
+                                            EventSeverity::Info,
+                                            format!("Copied raw output for: {}", src_id.as_str()),
+                                        ));
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    continue;
+                }
+
                 // --- Filter mode: intercept all input ---
                 if app.port_filter_active {
                     match key.code {
@@ -249,6 +348,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // --- Normal mode ---
                 match key.code {
+                    KeyCode::Char('o') | KeyCode::Char('ㅐ') => {
+                        let sources = match app.view_mode {
+                            ViewMode::Interface | ViewMode::Network => vec![CommandSourceId::Ifconfig],
+                            ViewMode::Connections => vec![CommandSourceId::NetstatConnections],
+                            ViewMode::Ports => vec![CommandSourceId::LsofPorts],
+                            ViewMode::Routes => vec![CommandSourceId::NetstatRoutes, CommandSourceId::DefaultRoute, CommandSourceId::PublicIp],
+                            ViewMode::Timeline => vec![CommandSourceId::Ifconfig, CommandSourceId::NetstatRoutes, CommandSourceId::DefaultRoute, CommandSourceId::PublicIp],
+                        };
+                        if !sources.is_empty() {
+                            app.raw_viewer.active = true;
+                            app.raw_viewer.sources = sources;
+                            app.raw_viewer.selected_index = 0;
+                            app.raw_viewer.scroll = 0;
+                            app.raw_viewer.search_query.clear();
+                            app.raw_viewer.search_active = false;
+                            app.raw_viewer.search_matches.clear();
+                        }
+                    }
                     KeyCode::Char('q') | KeyCode::Char('ㅂ') => break,
                     KeyCode::Char('r') | KeyCode::Char('ㄱ') => {
                         let _ = tick_update(&mut app);

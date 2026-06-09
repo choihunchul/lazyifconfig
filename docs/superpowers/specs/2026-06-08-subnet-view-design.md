@@ -92,7 +92,7 @@ impl NetworkKind {
 ```
 
 #### [InterfaceAddress] (변경 - `src/model.rs`)
-주소 모델에 `prefix_len` 필드를 추가합니다.
+주소 모델에 `prefix_len` 및 `gateway` 필드를 추가합니다.
 
 ```rust
 // src/model.rs
@@ -100,6 +100,7 @@ impl NetworkKind {
 pub struct InterfaceAddress {
     pub value: String,
     pub prefix_len: Option<u8>,
+    pub gateway: Option<String>,
 }
 ```
 

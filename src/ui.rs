@@ -7,17 +7,22 @@ use ratatui::{
 };
 use crate::app::{App, NavigationItem, ViewMode};
 use crate::model::{InterfaceStatus, Subnet, NetworkKind};
+use chrono::{DateTime, Local};
 
 pub fn render_title() -> &'static str {
     "lazyifconfig"
 }
 
 pub fn draw(frame: &mut Frame, app: &App) {
+    // When in port filter mode, allocate an extra line for the filter bar
+    let filter_bar_height: u16 = if app.port_filter_active || (app.view_mode == ViewMode::Ports && !app.port_filter.is_empty()) { 1 } else { 0 };
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),
             Constraint::Length(5),
+            Constraint::Length(filter_bar_height),
             Constraint::Length(1),
         ])
         .split(frame.size());
@@ -37,6 +42,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
         ViewMode::Interface => " Interfaces ",
         ViewMode::Network => " Networks (Subnet View) ",
         ViewMode::Connections => " Active Connections ",
+        ViewMode::Ports => " Listening Ports ",
+        ViewMode::Timeline => " Event Timeline ",
+        ViewMode::Routes => " Routes ",
     };
     let list_block = Block::default().borders(Borders::ALL).title(title);
     
@@ -99,6 +107,32 @@ pub fn draw(frame: &mut Frame, app: &App) {
             NavigationItem::Connection { proto, local, foreign, state, .. } => {
                 let state_str = state.as_ref().map(|s| format!(" ({})", s)).unwrap_or_default();
                 let text = format!("[{}] {} -> {}{}", proto.to_uppercase(), local, foreign, state_str);
+                list_items.push(ListItem::new(text).style(style));
+            }
+            NavigationItem::ListeningPort { proto, port, command, pid, .. } => {
+                let text = format!("[{}] :{:<6} {} (PID: {})", proto.to_uppercase(), port, command, pid);
+                list_items.push(ListItem::new(text).style(style));
+            }
+            NavigationItem::Event { index, kind, timestamp, message } => {
+                let datetime: DateTime<Local> = (*timestamp).into();
+                let time_str = datetime.format("%H:%M:%S").to_string();
+                let text = format!("{} [{}] {}", time_str, kind.as_str(), message);
+                
+                // Color code based on severity
+                let mut item_style = style;
+                if idx != app.selected_index {
+                    if let Some(event) = app.recent_events.get(*index) {
+                        match event.severity {
+                            crate::model::EventSeverity::Warning => item_style = item_style.fg(Color::Yellow),
+                            crate::model::EventSeverity::Error => item_style = item_style.fg(Color::Red),
+                            crate::model::EventSeverity::Info => {}
+                        }
+                    }
+                }
+                list_items.push(ListItem::new(text).style(item_style));
+            }
+            NavigationItem::Route { destination, interface, .. } => {
+                let text = format!("{:<18} → {}", destination, interface);
                 list_items.push(ListItem::new(text).style(style));
             }
         }
@@ -369,6 +403,198 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     .scroll((app.details_scroll, 0));
                 frame.render_widget(details_p, details_inner);
             }
+            NavigationItem::ListeningPort { proto, port, command, pid, user, .. } => {
+                let mut lines = Vec::new();
+                lines.push(Line::from(Span::styled(
+                    "=== Listening Port Details ===",
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("Protocol:   ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(proto.to_uppercase()),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("Port:       ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(port.as_str(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                ]));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "=== Process Information ===",
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("Command:    ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(command.as_str(), Style::default().fg(Color::Green)),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("PID:        ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(pid.as_str()),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("User:       ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(user.as_str()),
+                ]));
+
+                let details_p = Paragraph::new(lines)
+                    .wrap(Wrap { trim: true })
+                    .scroll((app.details_scroll, 0));
+                frame.render_widget(details_p, details_inner);
+            }
+            NavigationItem::Event { index, kind, timestamp, message } => {
+                let mut lines = Vec::new();
+                lines.push(Line::from(Span::styled(
+                    "=== Event Details ===",
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("Type:        ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(kind.as_str(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                ]));
+                
+                let datetime: DateTime<Local> = (*timestamp).into();
+                let time_str = datetime.format("%Y-%m-%d %H:%M:%S").to_string();
+                lines.push(Line::from(vec![
+                    Span::styled("Time:        ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(time_str),
+                ]));
+                
+                let severity_str = if let Some(event) = app.recent_events.get(*index) {
+                    event.severity.as_str()
+                } else {
+                    "INFO"
+                };
+                let severity_color = match severity_str {
+                    "WARNING" => Color::Yellow,
+                    "ERROR" => Color::Red,
+                    _ => Color::Green,
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("Severity:    ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(severity_str, Style::default().fg(severity_color).add_modifier(Modifier::BOLD)),
+                ]));
+                
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("Description: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(message.as_str()),
+                ]));
+                
+                let impact = match kind {
+                    crate::model::NetworkEventKind::VpnConnected => "Traffic may be routed through VPN. Default routes might change.",
+                    crate::model::NetworkEventKind::VpnDisconnected => "VPN connection lost. Traffic will not be routed through VPN.",
+                    crate::model::NetworkEventKind::ContainerNetworkAppeared => "Local container networking active. Container services might be reachable.",
+                    crate::model::NetworkEventKind::ContainerNetworkRemoved => "Local container networking inactive.",
+                    crate::model::NetworkEventKind::InterfaceAppeared => "New network interface is discovered and registered.",
+                    crate::model::NetworkEventKind::InterfaceRemoved => "Interface has been removed or disabled.",
+                    crate::model::NetworkEventKind::InterfaceUp => "Network interface is now active and up.",
+                    crate::model::NetworkEventKind::InterfaceDown => "Network interface is inactive. No traffic can flow.",
+                    crate::model::NetworkEventKind::Ipv4Added | crate::model::NetworkEventKind::Ipv6Added => "IP address assigned. Communications on this subnet are now enabled.",
+                    crate::model::NetworkEventKind::Ipv4Removed | crate::model::NetworkEventKind::Ipv6Removed => "IP address unassigned. Host loses addressability on this subnet.",
+                    crate::model::NetworkEventKind::Ipv4Changed | crate::model::NetworkEventKind::Ipv6Changed => "IP address has changed. Active sockets on this interface might drop.",
+                    crate::model::NetworkEventKind::ProcessKilled => "The process holding the listening port has been terminated. Port is now free.",
+                    crate::model::NetworkEventKind::ActionCopied => "An IP address has been successfully copied to your system clipboard.",
+                    crate::model::NetworkEventKind::ActionWhois => "WHOIS query initiated to fetch metadata for the foreign IP address.",
+                    crate::model::NetworkEventKind::SystemError => "A command or system level call returned an error status.",
+                    crate::model::NetworkEventKind::PublicIpChanged => "Your public IP address has changed. Network route or VPN activation might have occurred.",
+                    crate::model::NetworkEventKind::ProviderChanged => "Your ISP or network provider has changed. Active routing paths updated.",
+                };
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "=== Expected Impact ===",
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::raw(impact)));
+
+                let details_p = Paragraph::new(lines)
+                    .wrap(Wrap { trim: true })
+                    .scroll((app.details_scroll, 0));
+                frame.render_widget(details_p, details_inner);
+            }
+            NavigationItem::Route { destination, gateway, interface, .. } => {
+                let mut lines = Vec::new();
+                
+                // 1. Selected Route
+                lines.push(Line::from(Span::styled(
+                    "=== Selected Route ===",
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("Destination:   ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(destination.as_str()),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("Gateway:       ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(gateway.as_str()),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("Interface:     ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(interface.as_str(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                ]));
+                lines.push(Line::from(""));
+
+                // 2. Default Route Summary
+                lines.push(Line::from(Span::styled(
+                    "=== Default Route Summary ===",
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(""));
+                
+                let mut def_gw = "None".to_string();
+                let mut def_if = "None".to_string();
+                if let Some(snapshot) = &app.current_snapshot {
+                    // Search for active default route in routes table
+                    if let Some(def_route) = snapshot.routes.iter().find(|r| {
+                        r.destination == "default" && !r.gateway.starts_with("link#")
+                    }) {
+                        def_gw = def_route.gateway.clone();
+                        def_if = def_route.interface.clone();
+                    }
+                }
+                
+                lines.push(Line::from(vec![
+                    Span::styled("Gateway:       ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(def_gw),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("Interface:     ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(def_if, Style::default().fg(Color::Green)),
+                ]));
+                lines.push(Line::from(""));
+
+                // 3. Public IP connectivity
+                lines.push(Line::from(Span::styled(
+                    "=== Public IP Connectivity ===",
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(""));
+                
+                if let Some(ip_info) = &app.current_public_ip_info {
+                    lines.push(Line::from(vec![
+                        Span::styled("IP Address:    ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(ip_info.ip.as_str(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                    ]));
+                    lines.push(Line::from(vec![
+                        Span::styled("ISP/Provider:  ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(ip_info.provider.as_deref().unwrap_or("Unknown")),
+                    ]));
+                    lines.push(Line::from(vec![
+                        Span::styled("Country:       ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(ip_info.country.as_deref().unwrap_or("Unknown")),
+                    ]));
+                } else {
+                    lines.push(Line::from("Loading public IP info..."));
+                }
+
+                let details_p = Paragraph::new(lines)
+                    .wrap(Wrap { trim: true })
+                    .scroll((app.details_scroll, 0));
+                frame.render_widget(details_p, details_inner);
+            }
         }
     } else {
         let details_p = Paragraph::new("No data collected yet. Press 'r' to refresh.")
@@ -383,28 +609,66 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .title(" Recent Events ");
     let mut event_items = Vec::new();
     for event in app.recent_events.iter().rev().take(10) {
-        event_items.push(ListItem::new(format!("[{}] {}", event.captured_at_secs, event.message)));
+        let datetime: DateTime<Local> = event.timestamp.into();
+        let time_str = datetime.format("%H:%M:%S").to_string();
+        
+        let mut item_style = Style::default();
+        match event.severity {
+            crate::model::EventSeverity::Warning => item_style = item_style.fg(Color::Yellow),
+            crate::model::EventSeverity::Error => item_style = item_style.fg(Color::Red),
+            _ => {}
+        }
+        
+        event_items.push(ListItem::new(format!("[{}] {}", time_str, event.message)).style(item_style));
     }
     let event_list = List::new(event_items).block(event_block);
     frame.render_widget(event_list, chunks[1]);
 
-    // 4. Status Bar
+    // 4. Filter Bar (Ports view only)
+    if filter_bar_height > 0 {
+        let filter_text = if app.port_filter_active {
+            format!(" 🔍 Filter: {}▌", app.port_filter)
+        } else {
+            format!(" 🔍 Filter: {}  (f: edit, Esc: clear)", app.port_filter)
+        };
+        let filter_style = if app.port_filter_active {
+            Style::default().bg(Color::DarkGray).fg(Color::Yellow)
+        } else {
+            Style::default().bg(Color::DarkGray).fg(Color::White)
+        };
+        let filter_p = Paragraph::new(filter_text).style(filter_style);
+        frame.render_widget(filter_p, chunks[2]);
+    }
+
+    // 5. Status Bar
+    let status_idx = if filter_bar_height > 0 { 3 } else { 2 };
     let status_text = match app.view_mode {
         ViewMode::Connections => {
-            format!(
-                " q: Quit | c: Copy IP | w: WHOIS | [/]: Scroll Details | i: Interface | n: Network | j/k: Nav "
-            )
+            " q: Quit | c: Copy IP | w: WHOIS | [/]: Scroll | i: Interface | n: Network | p: Ports | e: Timeline | g: Routes | j/k: Nav ".to_string()
+        }
+        ViewMode::Ports => {
+            if app.port_filter_active {
+                " Type to filter | Enter: confirm | Esc: clear | Backspace: delete ".to_string()
+            } else {
+                " q: Quit | f: Filter | K: Kill PID | r: Refresh | [/]: Scroll | i/n/c/e/g: Switch View | j/k: Nav ".to_string()
+            }
+        }
+        ViewMode::Timeline => {
+            " q: Quit | [/]: Scroll | i: Interface | n: Network | c: Connections | p: Ports | g: Routes | j/k: Nav ".to_string()
+        }
+        ViewMode::Routes => {
+            " q: Quit | [/]: Scroll | i: Interface | n: Network | c: Connections | p: Ports | e: Timeline | j/k: Nav ".to_string()
         }
         _ => {
             format!(
-                " q: Quit | r: Refresh | a: Toggle -a ({}) | i: Interface | n: Network | c: Connections | [/]: Scroll Details | j/k: Nav ",
+                " q: Quit | r: Refresh | a: Toggle -a ({}) | i: Interface | n: Network | c: Connections | p: Ports | e: Timeline | g: Routes | j/k: Nav ",
                 if app.show_all { "ON" } else { "OFF" }
             )
         }
     };
     let status_p = Paragraph::new(status_text)
         .style(Style::default().bg(Color::Blue).fg(Color::White));
-    frame.render_widget(status_p, chunks[2]);
+    frame.render_widget(status_p, chunks[status_idx]);
 }
 
 fn prefix_len_to_ipv4_mask(prefix_len: u8) -> String {
@@ -497,6 +761,21 @@ mod tests {
                 associated_ip: Some("192.168.0.15".to_string()),
             }
         ];
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+    }
+
+    #[test]
+    fn test_ui_draw_timeline_view_no_panic() {
+        let mut app = App::default();
+        app.view_mode = ViewMode::Timeline;
+        app.recent_events.push(crate::model::NetworkEvent::new(
+            crate::model::NetworkEventKind::VpnConnected,
+            crate::model::EventSeverity::Info,
+            "utun0 connected".to_string(),
+        ));
+        app.update_navigation_items();
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &app)).unwrap();

@@ -23,11 +23,17 @@ fn snapshot_can_hold_interfaces_and_events() {
         }),
     };
 
-    let event = NetworkEvent::new("en0 appeared".to_string(), 10);
+    let event = NetworkEvent::new(
+        lazyifconfig::model::NetworkEventKind::InterfaceAppeared,
+        lazyifconfig::model::EventSeverity::Info,
+        "en0 appeared".to_string(),
+    );
 
     let snapshot = NetworkSnapshot {
         interfaces: vec![interface],
         connections: vec![],
+        listening_ports: vec![],
+        routes: vec![],
         captured_at_secs: 10,
     };
 
@@ -100,9 +106,11 @@ fn replace_snapshot_emits_appearance_event() {
         vec![interface_with_stats("en0", Some("192.168.0.10"), Some((100, 50)))],
     ));
 
-    assert_eq!(app.recent_events.len(), 1);
-    assert_eq!(app.recent_events[0].captured_at_secs, 20);
+    assert_eq!(app.recent_events.len(), 2);
     assert_eq!(app.recent_events[0].message, "en0 appeared");
+    assert_eq!(app.recent_events[0].kind, lazyifconfig::model::NetworkEventKind::InterfaceAppeared);
+    assert_eq!(app.recent_events[1].message, "en0: added IPv4 192.168.0.10");
+    assert_eq!(app.recent_events[1].kind, lazyifconfig::model::NetworkEventKind::Ipv4Added);
 }
 
 #[test]
@@ -116,8 +124,8 @@ fn replace_snapshot_emits_disappearance_event() {
     app.replace_snapshot(snapshot_with_interfaces(20, vec![]));
 
     assert_eq!(app.recent_events.len(), 1);
-    assert_eq!(app.recent_events[0].captured_at_secs, 20);
     assert_eq!(app.recent_events[0].message, "en0 disappeared");
+    assert_eq!(app.recent_events[0].kind, lazyifconfig::model::NetworkEventKind::InterfaceRemoved);
 }
 
 #[test]
@@ -145,8 +153,8 @@ fn replace_snapshot_emits_status_change_event() {
     ));
 
     assert_eq!(app.recent_events.len(), 1);
-    assert_eq!(app.recent_events[0].captured_at_secs, 20);
     assert_eq!(app.recent_events[0].message, "en0 status changed: up -> down");
+    assert_eq!(app.recent_events[0].kind, lazyifconfig::model::NetworkEventKind::InterfaceDown);
 }
 
 #[test]
@@ -163,11 +171,11 @@ fn replace_snapshot_emits_ipv4_change_event() {
     ));
 
     assert_eq!(app.recent_events.len(), 1);
-    assert_eq!(app.recent_events[0].captured_at_secs, 20);
     assert_eq!(
         app.recent_events[0].message,
-        "en0 IPv4 changed: 192.168.0.10 -> 192.168.0.11"
+        "en0: 192.168.0.10 -> 192.168.0.11"
     );
+    assert_eq!(app.recent_events[0].kind, lazyifconfig::model::NetworkEventKind::Ipv4Changed);
 }
 
 #[test]
@@ -179,7 +187,7 @@ fn replace_snapshot_keeps_only_most_recent_fifty_events() {
         vec![interface_with_stats("en0", Some("192.168.0.0"), Some((0, 0)))],
     ));
 
-    for idx in 1..=55 {
+    for idx in 1..=110 {
         app.replace_snapshot(snapshot_with_interfaces(
             idx,
             vec![interface_with_stats(
@@ -190,20 +198,14 @@ fn replace_snapshot_keeps_only_most_recent_fifty_events() {
         ));
     }
 
-    assert_eq!(app.recent_events.len(), 50);
+    assert_eq!(app.recent_events.len(), 100);
     assert_eq!(
         app.recent_events.first().map(|event| event.message.as_str()),
-        Some("en0 IPv4 changed: 192.168.0.5 -> 192.168.0.6")
-    );
-    assert_eq!(
-        app.recent_events
-            .first()
-            .map(|event| event.captured_at_secs),
-        Some(6)
+        Some("en0: 192.168.0.10 -> 192.168.0.11")
     );
     assert_eq!(
         app.recent_events.last().map(|event| event.message.as_str()),
-        Some("en0 IPv4 changed: 192.168.0.54 -> 192.168.0.55")
+        Some("en0: 192.168.0.109 -> 192.168.0.110")
     );
 }
 
@@ -211,6 +213,8 @@ fn snapshot_with_interfaces(captured_at_secs: u64, interfaces: Vec<NetworkInterf
     NetworkSnapshot {
         interfaces,
         connections: vec![],
+        listening_ports: vec![],
+        routes: vec![],
         captured_at_secs,
     }
 }
@@ -257,6 +261,8 @@ fn test_app_navigation() {
             interface_with_stats("utun0", None, None),
         ],
         connections: vec![],
+        listening_ports: vec![],
+        routes: vec![],
         captured_at_secs: 10,
     });
     assert_eq!(app.selected_index, 0);
@@ -311,6 +317,8 @@ fn test_app_network_view_grouping() {
     app.replace_snapshot(lazyifconfig::model::NetworkSnapshot {
         interfaces: vec![en0, lo0],
         connections: vec![],
+        listening_ports: vec![],
+        routes: vec![],
         captured_at_secs: 100,
     });
 
@@ -353,6 +361,8 @@ fn test_traffic_history_bounding_and_cleanup() {
         app.replace_snapshot(NetworkSnapshot {
             interfaces: vec![interface],
             connections: vec![],
+            listening_ports: vec![],
+            routes: vec![],
             captured_at_secs: idx as u64,
         });
     }
@@ -366,8 +376,98 @@ fn test_traffic_history_bounding_and_cleanup() {
     app.replace_snapshot(NetworkSnapshot {
         interfaces: vec![],
         connections: vec![],
+        listening_ports: vec![],
+        routes: vec![],
         captured_at_secs: 100,
     });
     assert!(app.traffic_history.get("en0").is_none());
+}
+
+#[test]
+fn test_event_timeline_functionality() {
+    let mut app = App::default();
+    
+    app.recent_events.push(NetworkEvent::new(
+        lazyifconfig::model::NetworkEventKind::VpnConnected,
+        lazyifconfig::model::EventSeverity::Info,
+        "utun0 connected".to_string(),
+    ));
+    app.recent_events.push(NetworkEvent::new(
+        lazyifconfig::model::NetworkEventKind::InterfaceDown,
+        lazyifconfig::model::EventSeverity::Warning,
+        "en0 status changed: up -> down".to_string(),
+    ));
+
+    app.set_view_mode(lazyifconfig::app::ViewMode::Timeline);
+    assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Timeline);
+    assert_eq!(app.navigation_items.len(), 2);
+
+    if let lazyifconfig::app::NavigationItem::Event { index, kind, message, .. } = &app.navigation_items[0] {
+        assert_eq!(*index, 0);
+        assert_eq!(*kind, lazyifconfig::model::NetworkEventKind::VpnConnected);
+        assert_eq!(message, "utun0 connected");
+    } else {
+        panic!("Expected NavigationItem::Event at index 0");
+    }
+
+    if let lazyifconfig::app::NavigationItem::Event { index, kind, message, .. } = &app.navigation_items[1] {
+        assert_eq!(*index, 1);
+        assert_eq!(*kind, lazyifconfig::model::NetworkEventKind::InterfaceDown);
+        assert_eq!(message, "en0 status changed: up -> down");
+    } else {
+        panic!("Expected NavigationItem::Event at index 1");
+    }
+}
+
+#[test]
+fn test_routes_navigation() {
+    let mut app = App::default();
+    let r1 = lazyifconfig::model::RouteEntry {
+        destination: "default".to_string(),
+        gateway: "192.168.0.1".to_string(),
+        interface: "en0".to_string(),
+    };
+    let r2 = lazyifconfig::model::RouteEntry {
+        destination: "10.8.0.0/24".to_string(),
+        gateway: "10.8.0.1".to_string(),
+        interface: "utun4".to_string(),
+    };
+
+    app.replace_snapshot(NetworkSnapshot {
+        interfaces: vec![],
+        connections: vec![],
+        listening_ports: vec![],
+        routes: vec![r1, r2],
+        captured_at_secs: 10,
+    });
+
+    // Switch to Routes view
+    app.set_view_mode(lazyifconfig::app::ViewMode::Routes);
+    assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Routes);
+    assert_eq!(app.navigation_items.len(), 2);
+
+    if let lazyifconfig::app::NavigationItem::Route { destination, gateway, interface, index } = &app.navigation_items[0] {
+        assert_eq!(destination, "default");
+        assert_eq!(gateway, "192.168.0.1");
+        assert_eq!(interface, "en0");
+        assert_eq!(*index, 0);
+    } else {
+        panic!("Expected NavigationItem::Route at index 0");
+    }
+
+    if let lazyifconfig::app::NavigationItem::Route { destination, gateway, interface, index } = &app.navigation_items[1] {
+        assert_eq!(destination, "10.8.0.0/24");
+        assert_eq!(gateway, "10.8.0.1");
+        assert_eq!(interface, "utun4");
+        assert_eq!(*index, 1);
+    } else {
+        panic!("Expected NavigationItem::Route at index 1");
+    }
+
+    assert_eq!(app.selected_index, 0);
+    app.select_next();
+    assert_eq!(app.selected_index, 1);
+    app.select_next();
+    assert_eq!(app.selected_index, 0);
 }
 
