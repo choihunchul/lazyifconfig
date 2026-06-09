@@ -641,7 +641,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
 
     // 5. Status Bar
-    let status_idx = if filter_bar_height > 0 { 3 } else { 2 };
+    let status_idx = 3;
     let status_text = match app.view_mode {
         ViewMode::Connections => {
             " q: Quit | c: Copy IP | w: WHOIS | o: Raw Output | [/]: Scroll | i: Interface | n: Network | p: Ports | e: Timeline | g: Routes | j/k: Nav ".to_string()
