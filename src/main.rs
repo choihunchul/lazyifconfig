@@ -7,7 +7,7 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use lazyifconfig::app::{App, ViewMode, NavigationItem};
-use lazyifconfig::command::{run_ifconfig, run_netstat, run_netstat_an, run_netstat_ib, run_lsof_listening, run_kill, run_curl, run_route_default};
+use lazyifconfig::command::{run_command_capture, run_kill, run_netstat_ib};
 use lazyifconfig::collector::interface::{parse_interfaces, merge_gateways};
 use lazyifconfig::collector::stats::merge_stats;
 use lazyifconfig::collector::connections::parse_connections;
@@ -23,25 +23,11 @@ pub fn tick_update(app: &mut App) -> Result<(), String> {
         }
     }
 
-    let raw_out_res = run_ifconfig(app.show_all);
-    app.command_outputs.insert(CommandSourceId::Ifconfig, CommandOutput {
-        command: "ifconfig".to_string(),
-        stdout: raw_out_res.clone().unwrap_or_default(),
-        stderr: raw_out_res.clone().err().unwrap_or_default(),
-        executed_at: std::time::SystemTime::now(),
-        exit_code: if raw_out_res.is_ok() { Some(0) } else { Some(1) },
-    });
+    let raw_out_res = capture_command_output(app, CommandSourceId::Ifconfig, "ifconfig", "ifconfig", &[]);
     let raw_out = raw_out_res?;
     let mut parsed = parse_interfaces(&raw_out);
     
-    let netstat_out_res = run_netstat();
-    app.command_outputs.insert(CommandSourceId::NetstatRoutes, CommandOutput {
-        command: "netstat -rn".to_string(),
-        stdout: netstat_out_res.clone().unwrap_or_default(),
-        stderr: netstat_out_res.clone().err().unwrap_or_default(),
-        executed_at: std::time::SystemTime::now(),
-        exit_code: if netstat_out_res.is_ok() { Some(0) } else { Some(1) },
-    });
+    let netstat_out_res = capture_command_output(app, CommandSourceId::NetstatRoutes, "netstat -rn", "netstat", &["-rn"]);
     let netstat_out = netstat_out_res.ok();
     if let Some(out) = &netstat_out {
         merge_gateways(&mut parsed, out);
@@ -53,40 +39,19 @@ pub fn tick_update(app: &mut App) -> Result<(), String> {
         Vec::new()
     };
     
-    let route_default_res = run_route_default();
-    app.command_outputs.insert(CommandSourceId::DefaultRoute, CommandOutput {
-        command: "route -n get default".to_string(),
-        stdout: route_default_res.clone().unwrap_or_default(),
-        stderr: route_default_res.clone().err().unwrap_or_default(),
-        executed_at: std::time::SystemTime::now(),
-        exit_code: if route_default_res.is_ok() { Some(0) } else { Some(1) },
-    });
+    let _ = capture_command_output(app, CommandSourceId::DefaultRoute, "route -n get default", "route", &["-n", "get", "default"]);
 
     let stats_out = run_netstat_ib().unwrap_or_else(|_| raw_out.clone());
     let merged = merge_stats(&stats_out, parsed);
 
-    let connections_res = run_netstat_an();
-    app.command_outputs.insert(CommandSourceId::NetstatConnections, CommandOutput {
-        command: "netstat -an".to_string(),
-        stdout: connections_res.clone().unwrap_or_default(),
-        stderr: connections_res.clone().err().unwrap_or_default(),
-        executed_at: std::time::SystemTime::now(),
-        exit_code: if connections_res.is_ok() { Some(0) } else { Some(1) },
-    });
+    let connections_res = capture_command_output(app, CommandSourceId::NetstatConnections, "netstat -an", "netstat", &["-an"]);
     let connections = if let Ok(netstat_an_out) = &connections_res {
         parse_connections(netstat_an_out)
     } else {
         Vec::new()
     };
 
-    let ports_res = run_lsof_listening();
-    app.command_outputs.insert(CommandSourceId::LsofPorts, CommandOutput {
-        command: "lsof -iTCP -sTCP:LISTEN -P -n".to_string(),
-        stdout: ports_res.clone().unwrap_or_default(),
-        stderr: ports_res.clone().err().unwrap_or_default(),
-        executed_at: std::time::SystemTime::now(),
-        exit_code: if ports_res.is_ok() { Some(0) } else { Some(1) },
-    });
+    let ports_res = capture_command_output(app, CommandSourceId::LsofPorts, "lsof -iTCP -sTCP:LISTEN -P -n", "lsof", &["-iTCP", "-sTCP:LISTEN", "-P", "-n"]);
     let listening_ports = if let Ok(lsof_out) = &ports_res {
         parse_listening_ports(lsof_out)
     } else {
@@ -110,15 +75,16 @@ pub fn tick_update(app: &mut App) -> Result<(), String> {
         let async_outputs_clone = app.async_command_outputs.clone();
         tokio::spawn(async move {
             let start_time = std::time::SystemTime::now();
-            let raw_json_res = run_curl("https://ipinfo.io/json");
+            let raw_json_capture = run_command_capture("curl", &["-s", "-m", "5", "https://ipinfo.io/json"]);
+            let raw_json_res = raw_json_capture.as_ref().map(command_stdout).unwrap_or_else(|e| Err(e.clone()));
             
             if let Ok(mut lock) = async_outputs_clone.lock() {
                 lock.insert(CommandSourceId::PublicIp, CommandOutput {
                     command: "curl -s -m 5 https://ipinfo.io/json".to_string(),
-                    stdout: raw_json_res.clone().unwrap_or_default(),
-                    stderr: raw_json_res.clone().err().unwrap_or_default(),
+                    stdout: raw_json_capture.as_ref().map(|out| out.stdout.clone()).unwrap_or_default(),
+                    stderr: raw_json_capture.as_ref().map(|out| out.stderr.clone()).unwrap_or_else(|e| e.clone()),
                     executed_at: start_time,
-                    exit_code: if raw_json_res.is_ok() { Some(0) } else { Some(1) },
+                    exit_code: raw_json_capture.as_ref().ok().and_then(|out| out.exit_code).or(Some(1)),
                 });
             }
 
@@ -197,6 +163,35 @@ pub fn tick_update(app: &mut App) -> Result<(), String> {
     Ok(())
 }
 
+fn capture_command_output(
+    app: &mut App,
+    source_id: CommandSourceId,
+    command: &str,
+    program: &str,
+    args: &[&str],
+) -> Result<String, String> {
+    let captured = run_command_capture(program, args)?;
+    let result = command_stdout(&captured);
+    app.command_outputs.insert(source_id, CommandOutput {
+        command: command.to_string(),
+        stdout: captured.stdout,
+        stderr: captured.stderr,
+        executed_at: std::time::SystemTime::now(),
+        exit_code: captured.exit_code,
+    });
+    result
+}
+
+fn command_stdout(output: &lazyifconfig::command::CommandResult) -> Result<String, String> {
+    if output.exit_code == Some(0) {
+        Ok(output.stdout.clone())
+    } else if output.stderr.trim().is_empty() {
+        Err(format!("command exited with {:?}", output.exit_code))
+    } else {
+        Err(output.stderr.clone())
+    }
+}
+
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -273,6 +268,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             KeyCode::Home => {
                                 app.raw_viewer.scroll = 0;
+                            }
+                            KeyCode::End => {
+                                app.raw_viewer.scroll = u16::MAX;
                             }
                             KeyCode::Char('/') => {
                                 app.raw_viewer.search_active = true;
