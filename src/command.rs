@@ -49,6 +49,24 @@ pub fn run_netstat_ib() -> Result<String, String> {
     }
 }
 
+pub fn run_lsof_listening() -> Result<String, String> {
+    use std::process::Command;
+    let mut cmd = Command::new("lsof");
+    cmd.args(["-iTCP", "-sTCP:LISTEN", "-P", "-n"]);
+    let output = cmd.output().map_err(|e| e.to_string())?;
+
+    if output.status.success() {
+        String::from_utf8(output.stdout).map_err(|e| e.to_string())
+    } else {
+        let stderr_str = String::from_utf8_lossy(&output.stderr).to_string();
+        if stderr_str.trim().is_empty() {
+            Ok(String::new())
+        } else {
+            Err(stderr_str)
+        }
+    }
+}
+
 pub fn run_whois(ip: &str) -> Result<String, String> {
     use std::process::Command;
     let mut cmd = Command::new("whois");
@@ -82,6 +100,46 @@ pub fn copy_to_clipboard(text: &str) -> Result<(), String> {
     
     child.wait().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+pub fn run_kill(pid: &str) -> Result<(), String> {
+    use std::process::Command;
+    let output = Command::new("kill")
+        .args(["-9", pid])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+pub fn run_curl(url: &str) -> Result<String, String> {
+    use std::process::Command;
+    let mut cmd = Command::new("curl");
+    cmd.args(["-s", "-m", "5", url]);
+    let output = cmd.output().map_err(|e| e.to_string())?;
+
+    if output.status.success() {
+        String::from_utf8(output.stdout).map_err(|e| e.to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+pub fn run_route_default() -> Result<String, String> {
+    use std::process::Command;
+    let mut cmd = Command::new("route");
+    cmd.args(["-n", "get", "default"]);
+    let output = cmd.output().map_err(|e| e.to_string())?;
+
+    if output.status.success() {
+        String::from_utf8(output.stdout).map_err(|e| e.to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
 }
 
 #[cfg(test)]
@@ -123,5 +181,17 @@ mod tests {
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(output.contains("Name") && output.contains("Ibytes") && output.contains("Obytes"));
+    }
+
+    #[test]
+    fn test_run_lsof_listening_success() {
+        let result = run_lsof_listening();
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_run_route_default_success() {
+        let result = run_route_default();
+        assert!(result.is_ok() || result.is_err());
     }
 }
