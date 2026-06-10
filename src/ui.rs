@@ -26,24 +26,24 @@ fn get_active_command(view_mode: ViewMode) -> &'static str {
 fn get_status_text(app: &App) -> String {
     match app.view_mode {
         ViewMode::Connections => {
-            " q quit | c copy | w whois | [/]: scroll | i/n/p/e/g view | j/k nav ".to_string()
+            " q | u check | U update | R notes | c copy | w whois | [/] | i/n/p/e/g ".to_string()
         }
         ViewMode::Ports => {
             if app.port_filter_active {
                 " filter: type | Enter apply | Esc clear | Backspace delete ".to_string()
             } else {
-                " q quit | f filter | K kill | r refresh | [/]: scroll | i/n/c/e/g view | j/k nav ".to_string()
+                " q | u check | U update | R notes | f filter | K kill | r | [/] | i/n/c/e/g ".to_string()
             }
         }
         ViewMode::Timeline => {
-            " q quit | [/]: scroll | i/n/c/p/g view | j/k nav ".to_string()
+            " q | u check | U update | R notes | [/] | i/n/c/p/g | j/k ".to_string()
         }
         ViewMode::Routes => {
-            " q quit | [/]: scroll | i/n/c/p/e view | j/k nav ".to_string()
+            " q | u check | U update | R notes | [/] | i/n/c/p/e | j/k ".to_string()
         }
         _ => {
             format!(
-                " q quit | r refresh | a all:{} | i/n/c/p/e/g view | j/k nav ",
+                " q | r | u check | U update | R notes | a:{} | i/n/c/p/e/g ",
                 if app.show_all { "on" } else { "off" }
             )
         }
@@ -53,12 +53,13 @@ fn get_status_text(app: &App) -> String {
 pub fn draw(frame: &mut Frame, app: &App) {
     // When in port filter mode, allocate an extra line for the filter bar
     let filter_bar_height: u16 = if app.port_filter_active || (app.view_mode == ViewMode::Ports && !app.port_filter.is_empty()) { 1 } else { 0 };
+    let command_panel_height = command_panel_height(app);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),                    // 0: Top pane
-            Constraint::Length(1),                 // 1: Active Command Panel (NEW)
+            Constraint::Length(command_panel_height), // 1: Active Command Panel
             Constraint::Length(5),                 // 2: Recent Events Panel
             Constraint::Length(filter_bar_height), // 3: Filter Bar
             Constraint::Length(1),                 // 4: Status Bar
@@ -538,6 +539,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     crate::model::NetworkEventKind::SystemError => "A command or system level call returned an error status.",
                     crate::model::NetworkEventKind::PublicIpChanged => "Your public IP address has changed. Network route or VPN activation might have occurred.",
                     crate::model::NetworkEventKind::ProviderChanged => "Your ISP or network provider has changed. Active routing paths updated.",
+                    crate::model::NetworkEventKind::UpdateAvailable => "A newer GitHub release was found and is ready to install.",
+                    crate::model::NetworkEventKind::UpdateInstalled => "A new binary has been installed. Restart the app to run the updated version.",
+                    crate::model::NetworkEventKind::UpdateCheckFailed => "The GitHub release check or install step failed.",
                 };
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
@@ -642,16 +646,8 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
 
     // 3. Active Command Panel
-    let command_str = get_active_command(app.view_mode);
-    let command_line = Line::from(vec![
-        Span::styled("$ ", Style::default().fg(Color::Rgb(0, 255, 102)).add_modifier(Modifier::BOLD)),
-        Span::styled(command_str, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-        Span::raw("   "),
-        Span::styled("o[output]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Span::raw(" "),
-        Span::styled("?[help]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-    ]);
-    let command_p = Paragraph::new(command_line);
+    let (command_lines, command_style) = build_command_panel(app);
+    let command_p = Paragraph::new(command_lines).style(command_style).wrap(Wrap { trim: true });
     frame.render_widget(command_p, chunks[1]);
 
     // 4. Event Panel
@@ -702,6 +698,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
         draw_help(frame);
     }
 
+    if app.release_notes_viewer.active {
+        draw_release_notes_viewer(frame, app);
+    }
+
     if app.raw_viewer.active {
         draw_raw_viewer(frame, app);
     }
@@ -722,6 +722,8 @@ fn draw_help(frame: &mut Frame) {
         Line::from("q quit    r refresh    a all interfaces"),
         Line::from("i interface  n network  c connections"),
         Line::from("p ports      e timeline g routes"),
+        Line::from("u check updates   U apply update"),
+        Line::from("R release notes    Esc close popup"),
         Line::from("o raw output ? help     Esc close"),
         Line::from("j/k or arrows move      [/]: details scroll"),
     ];
@@ -729,6 +731,218 @@ fn draw_help(frame: &mut Frame) {
         .wrap(Wrap { trim: true })
         .style(Style::default().bg(Color::Black).fg(Color::White));
     frame.render_widget(help, inner);
+}
+
+fn update_status_label(app: &App) -> String {
+    match &app.update_status {
+        crate::update::UpdateStatus::Idle => format!("v{}", env!("CARGO_PKG_VERSION")),
+        crate::update::UpdateStatus::Checking { manual } => {
+            if *manual {
+                "update: checking(now)".to_string()
+            } else {
+                "update: checking".to_string()
+            }
+        }
+        crate::update::UpdateStatus::Available { version } => {
+            format!("update: v{version} ready")
+        }
+        crate::update::UpdateStatus::Installing { version, .. } => {
+            format!("update: installing v{version}")
+        }
+        crate::update::UpdateStatus::Updated { version } => {
+            format!("update: v{version} installed")
+        }
+        crate::update::UpdateStatus::UpToDate => "update: latest".to_string(),
+        crate::update::UpdateStatus::Error { .. } => "update: error".to_string(),
+    }
+}
+
+fn command_panel_height(app: &App) -> u16 {
+    if matches!(&app.update_status, crate::update::UpdateStatus::Available { .. })
+        && app
+            .pending_update
+            .as_ref()
+            .is_some_and(|update| !update.release_notes.trim().is_empty())
+    {
+        2
+    } else {
+        1
+    }
+}
+
+fn build_command_panel(app: &App) -> (Vec<Line<'static>>, Style) {
+    let command_str = get_active_command(app.view_mode);
+    match &app.update_status {
+        crate::update::UpdateStatus::Available { version } => {
+            let mut lines = vec![Line::from(vec![
+                Span::styled(" UPDATE READY ", Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" "),
+                Span::styled(format!("v{version}"), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" "),
+                Span::styled("PRESS U TO INSTALL", Style::default().fg(Color::White).add_modifier(Modifier::BOLD | Modifier::RAPID_BLINK)),
+                Span::raw("   "),
+                Span::styled("u re-check", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            ])];
+
+            if let Some(update) = &app.pending_update {
+                let notes = summarize_release_notes_for_banner(&update.release_notes, 96);
+                lines.push(Line::from(vec![
+                    Span::styled(" Notes: ", Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD)),
+                    Span::styled(notes, Style::default().fg(Color::White)),
+                ]));
+            }
+
+            (lines, Style::default().bg(Color::DarkGray))
+        }
+        crate::update::UpdateStatus::Installing { version, .. } => (
+            vec![Line::from(vec![
+                Span::styled(" INSTALLING UPDATE ", Style::default().fg(Color::Black).bg(Color::LightBlue).add_modifier(Modifier::BOLD)),
+                Span::raw(" "),
+                Span::styled(format!("v{version}"), Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD)),
+                Span::raw(" "),
+                Span::styled("please wait", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            ])],
+            Style::default().bg(Color::DarkGray),
+        ),
+        crate::update::UpdateStatus::Updated { version } => (
+            vec![Line::from(vec![
+                Span::styled(" UPDATE INSTALLED ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw(" "),
+                Span::styled(format!("v{version}"), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw(" "),
+                Span::styled("restart app", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            ])],
+            Style::default().bg(Color::DarkGray),
+        ),
+        crate::update::UpdateStatus::Error { .. } => (
+            vec![Line::from(vec![
+                Span::styled(" UPDATE FAILED ", Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::raw(" "),
+                Span::styled("press u to check again", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            ])],
+            Style::default().bg(Color::DarkGray),
+        ),
+        _ => (
+            vec![Line::from(vec![
+                Span::styled("$ ", Style::default().fg(Color::Rgb(0, 255, 102)).add_modifier(Modifier::BOLD)),
+                Span::styled(command_str, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::raw("   "),
+                Span::styled(update_status_label(app), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw("   "),
+                Span::styled("o[output]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::raw(" "),
+                Span::styled("?[help]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            ])],
+            Style::default(),
+        ),
+    }
+}
+
+fn truncate_release_notes(notes: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+
+    for ch in notes.chars() {
+        if out.chars().count() >= max_chars {
+            out.push_str("...");
+            return out;
+        }
+        out.push(ch);
+    }
+
+    out
+}
+
+fn summarize_release_notes_for_banner(notes: &str, max_chars: usize) -> String {
+    let mut summary_parts = Vec::new();
+
+    for raw_line in notes.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let cleaned = trimmed
+            .trim_start_matches('#')
+            .trim_start_matches('-')
+            .trim_start_matches('*')
+            .trim_start_matches(' ')
+            .trim();
+
+        if cleaned.is_empty() {
+            continue;
+        }
+
+        summary_parts.push(cleaned.to_string());
+        if summary_parts.len() == 2 {
+            break;
+        }
+    }
+
+    let summary = if summary_parts.is_empty() {
+        notes.trim().to_string()
+    } else {
+        summary_parts.join(" | ")
+    };
+
+    truncate_release_notes(&summary, max_chars)
+}
+
+fn draw_release_notes_viewer(frame: &mut Frame, app: &App) {
+    let area = if frame.size().width < 90 || frame.size().height < 28 {
+        frame.size()
+    } else {
+        get_centered_rect(82, 78, frame.size())
+    };
+
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(" Release Notes ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .style(Style::default().bg(Color::Black).fg(Color::White));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let Some(update) = &app.pending_update else {
+        let empty = Paragraph::new("No pending release notes. Press 'u' to check for updates.")
+            .style(Style::default().bg(Color::Black).fg(Color::White));
+        frame.render_widget(empty, inner);
+        return;
+    };
+
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(5),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+
+    let header = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled("Version: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("v{}", update.target_version), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::styled("Release: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(update.release_url.as_str()),
+        ]),
+    ])
+    .style(Style::default().bg(Color::Black).fg(Color::White))
+    .wrap(Wrap { trim: true });
+    frame.render_widget(header, vertical[0]);
+
+    let notes = Paragraph::new(update.release_notes.clone())
+        .style(Style::default().bg(Color::Black).fg(Color::White))
+        .wrap(Wrap { trim: false })
+        .scroll((app.release_notes_viewer.scroll, 0));
+    frame.render_widget(notes, vertical[1]);
+
+    let footer = Paragraph::new("Esc/q/R close | j/k or arrows scroll")
+        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    frame.render_widget(footer, vertical[2]);
 }
 
 fn get_centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
@@ -1057,6 +1271,39 @@ mod tests {
     }
 
     #[test]
+    fn test_update_available_renders_loud_banner() {
+        let mut app = App::default();
+        app.update_status = crate::update::UpdateStatus::Available {
+            version: "9.9.9".to_string(),
+        };
+        app.pending_update = Some(crate::update::AvailableUpdate {
+            current_version: "0.1.0".to_string(),
+            target_version: "9.9.9".to_string(),
+            release_url: "https://example.com/release".to_string(),
+            asset_name: "lazyifconfig-v9.9.9-aarch64-apple-darwin.tar.gz".to_string(),
+            download_url: "https://example.com/release.tar.gz".to_string(),
+            release_notes: "Big networking refresh\nFaster route parsing\nExtra diagnostics".to_string(),
+        });
+
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("UPDATE READY"));
+        assert!(rendered.contains("PRESS U TO INSTALL"));
+        assert!(rendered.contains("v9.9.9"));
+        assert!(rendered.contains("Big networking refresh"));
+    }
+
+    #[test]
     fn test_status_text_is_compact_without_raw_output_hint() {
         let modes = [
             ViewMode::Interface,
@@ -1075,5 +1322,68 @@ mod tests {
             assert!(!status.contains("Raw Output"));
             assert!(status.len() <= 90, "status too long for {:?}: {}", mode, status);
         }
+    }
+
+    #[test]
+    fn test_status_text_mentions_update_actions() {
+        let app = App::default();
+        let status = get_status_text(&app);
+
+        assert!(status.contains("u check"));
+        assert!(status.contains("U update"));
+        assert!(status.contains("R notes"));
+    }
+
+    #[test]
+    fn test_help_mentions_update_shortcuts() {
+        let mut app = App::default();
+        app.help_visible = true;
+
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("u check updates"));
+        assert!(rendered.contains("U apply update"));
+        assert!(rendered.contains("R release notes"));
+    }
+
+    #[test]
+    fn test_release_notes_popup_renders_full_body() {
+        let mut app = App::default();
+        app.release_notes_viewer.active = true;
+        app.pending_update = Some(crate::update::AvailableUpdate {
+            current_version: "0.1.0".to_string(),
+            target_version: "9.9.9".to_string(),
+            release_url: "https://example.com/release".to_string(),
+            asset_name: "lazyifconfig-v9.9.9-aarch64-apple-darwin.tar.gz".to_string(),
+            download_url: "https://example.com/release.tar.gz".to_string(),
+            release_notes: "## Highlights\n- Faster scans\n- Better update UI\n- Route fixes".to_string(),
+        });
+
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("Release Notes"));
+        assert!(rendered.contains("v9.9.9"));
+        assert!(rendered.contains("Faster scans"));
+        assert!(rendered.contains("Better update UI"));
     }
 }

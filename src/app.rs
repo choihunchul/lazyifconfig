@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::model::{NetworkEvent, NetworkInterface, NetworkSnapshot, Subnet, PublicIpInfo, CommandSourceId, CommandOutput};
+use crate::update::{AvailableUpdate, UpdateMessage, UpdateStatus};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewMode {
@@ -76,6 +77,12 @@ pub struct App {
     pub raw_viewer: RawViewerState,
     pub help_visible: bool,
     pub async_command_outputs: std::sync::Arc<std::sync::Mutex<HashMap<CommandSourceId, CommandOutput>>>,
+    pub update_status: UpdateStatus,
+    pub pending_update: Option<AvailableUpdate>,
+    pub last_update_check: Option<std::time::Instant>,
+    pub update_messages: std::sync::Arc<std::sync::Mutex<Vec<UpdateMessage>>>,
+    pub attempted_update_version: Option<String>,
+    pub release_notes_viewer: ReleaseNotesViewerState,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,6 +102,12 @@ pub struct RawViewerState {
     pub search_active: bool,
     pub search_matches: Vec<SearchMatch>,
     pub current_match_index: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ReleaseNotesViewerState {
+    pub active: bool,
+    pub scroll: u16,
 }
 
 impl Default for App {
@@ -119,6 +132,12 @@ impl Default for App {
             raw_viewer: RawViewerState::default(),
             help_visible: false,
             async_command_outputs: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
+            update_status: UpdateStatus::Idle,
+            pending_update: None,
+            last_update_check: None,
+            update_messages: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            attempted_update_version: None,
+            release_notes_viewer: ReleaseNotesViewerState::default(),
         }
     }
 }
@@ -646,6 +665,14 @@ impl App {
     pub fn get_whois_result(&self, ip: &str) -> Option<String> {
         let lock = self.whois_cache.lock().ok()?;
         lock.get(ip).cloned()
+    }
+
+    pub fn push_event(&mut self, event: NetworkEvent) {
+        self.recent_events.push(event);
+        if self.recent_events.len() > 100 {
+            let overflow = self.recent_events.len() - 100;
+            self.recent_events.drain(0..overflow);
+        }
     }
 }
 

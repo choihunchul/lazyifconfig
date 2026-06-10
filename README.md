@@ -24,6 +24,7 @@ It combines `ifconfig`, `netstat`, `route`, `lsof`, and a periodic public IP loo
 - Route view from `netstat -rn`
 - Event timeline for interface and public IP changes
 - Raw command output capture inside the app
+- Background GitHub Release check with self-update support
 
 ## Requirements
 
@@ -66,6 +67,8 @@ cargo run --release
 
 - `q`: quit
 - `r`: refresh
+- `u`: check GitHub Release now
+- `U`: apply pending update now
 - `j` / `k`: move selection
 - `i`: interface view
 - `n`: network view
@@ -76,6 +79,8 @@ cargo run --release
 - `/` and `[` : scroll in list-heavy views
 
 Some views expose additional actions in the footer, including filtering ports, copying values, WHOIS lookup, and raw output inspection.
+
+When a newer GitHub Release is found, `lazyifconfig` will attempt to install the matching macOS release artifact automatically. After the binary is replaced, restart the app to run the new version.
 
 ## Testing
 
@@ -88,9 +93,16 @@ cargo test
 GitHub Actions creates a release when a tag matching `v*` is pushed.
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
+
+You can also trigger the `Create Release Tag` workflow from GitHub Actions.
+Enter `0.2.0` or `v0.2.0` as the input, and it will:
+
+- verify the version matches `Cargo.toml`
+- create an annotated `v*` tag
+- push the tag so the `Release` workflow builds artifacts and publishes the GitHub Release
 
 The release workflow builds and uploads artifacts for:
 

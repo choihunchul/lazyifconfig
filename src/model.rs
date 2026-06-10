@@ -159,6 +159,9 @@ pub enum NetworkEventKind {
     SystemError,
     PublicIpChanged,
     ProviderChanged,
+    UpdateAvailable,
+    UpdateInstalled,
+    UpdateCheckFailed,
 }
 
 impl NetworkEventKind {
@@ -184,6 +187,9 @@ impl NetworkEventKind {
             NetworkEventKind::SystemError => "System Error",
             NetworkEventKind::PublicIpChanged => "Public IP Changed",
             NetworkEventKind::ProviderChanged => "Provider Changed",
+            NetworkEventKind::UpdateAvailable => "Update Available",
+            NetworkEventKind::UpdateInstalled => "Update Installed",
+            NetworkEventKind::UpdateCheckFailed => "Update Check Failed",
         }
     }
 }
@@ -253,6 +259,7 @@ pub enum CommandSourceId {
     NetstatConnections,
     LsofPorts,
     PublicIp,
+    GitHubRelease,
     Arp,
 }
 
@@ -265,6 +272,7 @@ impl CommandSourceId {
             CommandSourceId::NetstatConnections => "netstat -an",
             CommandSourceId::LsofPorts => "lsof -iTCP -sTCP:LISTEN -P -n",
             CommandSourceId::PublicIp => "curl -s -m 5 https://ipinfo.io/json",
+            CommandSourceId::GitHubRelease => "curl -s -L https://api.github.com/repos/<owner>/<repo>/releases/latest",
             CommandSourceId::Arp => "arp -a",
         }
     }

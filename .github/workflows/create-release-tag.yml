@@ -1,0 +1,58 @@
+name: Create Release Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, for example 0.1.0 or v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  create-tag:
+    name: Validate and push release tag
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version against Cargo.toml
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          raw_version="${{ inputs.version }}"
+          normalized_version="${raw_version#v}"
+          tag="v${normalized_version}"
+
+          cargo_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+
+          if [[ -z "${cargo_version}" ]]; then
+            echo "Failed to read package version from Cargo.toml" >&2
+            exit 1
+          fi
+
+          if [[ "${cargo_version}" != "${normalized_version}" ]]; then
+            echo "Cargo.toml version (${cargo_version}) does not match requested release (${normalized_version})" >&2
+            exit 1
+          fi
+
+          if git rev-parse "${tag}" >/dev/null 2>&1; then
+            echo "Tag ${tag} already exists" >&2
+            exit 1
+          fi
+
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create annotated tag
+        run: git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
+
+      - name: Push tag
+        run: git push origin "${{ steps.version.outputs.tag }}"

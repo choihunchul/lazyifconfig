@@ -14,6 +14,9 @@ use lazyifconfig::collector::connections::parse_connections;
 use lazyifconfig::collector::ports::parse_listening_ports;
 use lazyifconfig::collector::routes::parse_routes;
 use lazyifconfig::model::{NetworkSnapshot, PublicIpInfo, NetworkEvent, NetworkEventKind, EventSeverity, CommandSourceId, CommandOutput};
+use lazyifconfig::update::{self, CheckOutcome, UpdateMessage, UpdateStatus};
+
+const RELEASE_CHECK_INTERVAL_SECS: u64 = 6 * 60 * 60;
 
 pub fn tick_update(app: &mut App) -> Result<(), String> {
     // Merge async command outputs
@@ -22,6 +25,10 @@ pub fn tick_update(app: &mut App) -> Result<(), String> {
             app.command_outputs.insert(*k, v.clone());
         }
     }
+
+    drain_update_messages(app);
+    maybe_start_auto_update_check(app);
+    maybe_start_auto_update_install(app);
 
     let raw_out_res = capture_command_output(app, CommandSourceId::Ifconfig, "ifconfig", "ifconfig", &[]);
     let raw_out = raw_out_res?;
@@ -192,6 +199,237 @@ fn command_stdout(output: &lazyifconfig::command::CommandResult) -> Result<Strin
     }
 }
 
+fn maybe_start_auto_update_check(app: &mut App) {
+    let is_busy = matches!(
+        app.update_status,
+        UpdateStatus::Checking { .. } | UpdateStatus::Installing { .. }
+    );
+    if is_busy {
+        return;
+    }
+
+    let should_check = match app.last_update_check {
+        None => true,
+        Some(last) => last.elapsed() >= Duration::from_secs(RELEASE_CHECK_INTERVAL_SECS),
+    };
+
+    if should_check {
+        start_update_check(app, false);
+    }
+}
+
+fn maybe_start_auto_update_install(app: &mut App) {
+    let Some(update) = app.pending_update.clone() else {
+        return;
+    };
+
+    let is_busy = matches!(
+        app.update_status,
+        UpdateStatus::Checking { .. } | UpdateStatus::Installing { .. }
+    );
+    if is_busy {
+        return;
+    }
+
+    if app.attempted_update_version.as_deref() == Some(update.target_version.as_str()) {
+        return;
+    }
+
+    start_update_install(app, false);
+}
+
+fn start_update_check(app: &mut App, manual: bool) {
+    let is_busy = matches!(
+        app.update_status,
+        UpdateStatus::Checking { .. } | UpdateStatus::Installing { .. }
+    );
+    if is_busy {
+        return;
+    }
+
+    let Ok(url) = update::release_api_url() else {
+        app.update_status = UpdateStatus::Error {
+            message: "invalid GitHub repository URL".to_string(),
+        };
+        app.push_event(NetworkEvent::new(
+            NetworkEventKind::UpdateCheckFailed,
+            EventSeverity::Error,
+            "Update check failed: invalid GitHub repository URL".to_string(),
+        ));
+        return;
+    };
+
+    app.update_status = UpdateStatus::Checking { manual };
+    app.last_update_check = Some(std::time::Instant::now());
+
+    let update_messages = app.update_messages.clone();
+    let async_outputs = app.async_command_outputs.clone();
+    tokio::spawn(async move {
+        let started_at = std::time::SystemTime::now();
+        let capture = run_command_capture(
+            "curl",
+            &[
+                "-sS",
+                "-L",
+                "-m",
+                "10",
+                "-H",
+                "Accept: application/vnd.github+json",
+                "-H",
+                "User-Agent: lazyifconfig",
+                &url,
+            ],
+        );
+
+        if let Ok(mut lock) = async_outputs.lock() {
+            lock.insert(
+                CommandSourceId::GitHubRelease,
+                CommandOutput {
+                    command: format!(
+                        "curl -sS -L -m 10 -H 'Accept: application/vnd.github+json' -H 'User-Agent: lazyifconfig' {url}"
+                    ),
+                    stdout: capture.as_ref().map(|out| out.stdout.clone()).unwrap_or_default(),
+                    stderr: capture
+                        .as_ref()
+                        .map(|out| out.stderr.clone())
+                        .unwrap_or_else(|err| err.clone()),
+                    executed_at: started_at,
+                    exit_code: capture.as_ref().ok().and_then(|out| out.exit_code).or(Some(1)),
+                },
+            );
+        }
+
+        let result = capture
+            .and_then(|out| command_stdout(&out))
+            .and_then(|stdout| update::evaluate_release_json(&stdout));
+
+        if let Ok(mut lock) = update_messages.lock() {
+            lock.push(UpdateMessage::CheckFinished { manual, result });
+        }
+    });
+}
+
+fn start_update_install(app: &mut App, manual: bool) {
+    let Some(update) = app.pending_update.clone() else {
+        if manual {
+            app.push_event(NetworkEvent::new(
+                NetworkEventKind::UpdateCheckFailed,
+                EventSeverity::Warning,
+                "No pending update found. Press 'u' to check now.".to_string(),
+            ));
+        }
+        return;
+    };
+
+    let is_busy = matches!(
+        app.update_status,
+        UpdateStatus::Checking { .. } | UpdateStatus::Installing { .. }
+    );
+    if is_busy {
+        return;
+    }
+
+    app.attempted_update_version = Some(update.target_version.clone());
+    app.update_status = UpdateStatus::Installing {
+        version: update.target_version.clone(),
+        manual,
+    };
+
+    let update_messages = app.update_messages.clone();
+    tokio::spawn(async move {
+        let current_exe = std::env::current_exe().map_err(|e| e.to_string());
+        let result = match current_exe {
+            Ok(path) => update::install_update(&update, &path),
+            Err(err) => Err(err),
+        };
+
+        if let Ok(mut lock) = update_messages.lock() {
+            lock.push(UpdateMessage::InstallFinished {
+                manual,
+                version: update.target_version.clone(),
+                result,
+            });
+        }
+    });
+}
+
+fn drain_update_messages(app: &mut App) {
+    let messages = if let Ok(mut lock) = app.update_messages.lock() {
+        lock.drain(..).collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+
+    for message in messages {
+        match message {
+            UpdateMessage::CheckFinished { manual, result } => match result {
+                Ok(CheckOutcome::UpToDate { .. }) => {
+                    app.pending_update = None;
+                    app.update_status = UpdateStatus::UpToDate;
+                    if manual {
+                        app.push_event(NetworkEvent::new(
+                            NetworkEventKind::UpdateInstalled,
+                            EventSeverity::Info,
+                            "Already running the latest release.".to_string(),
+                        ));
+                    }
+                }
+                Ok(CheckOutcome::Available(update)) => {
+                    let version = update.target_version.clone();
+                    app.pending_update = Some(update);
+                    app.update_status = UpdateStatus::Available {
+                        version: version.clone(),
+                    };
+                    app.push_event(NetworkEvent::new(
+                        NetworkEventKind::UpdateAvailable,
+                        EventSeverity::Info,
+                        if manual {
+                            format!("Update available: v{version}. Starting install.")
+                        } else {
+                            format!("Auto-update found v{version}. Starting install.")
+                        },
+                    ));
+                }
+                Err(err) => {
+                    app.update_status = UpdateStatus::Error {
+                        message: err.clone(),
+                    };
+                    app.push_event(NetworkEvent::new(
+                        NetworkEventKind::UpdateCheckFailed,
+                        EventSeverity::Error,
+                        format!("Update check failed: {err}"),
+                    ));
+                }
+            },
+            UpdateMessage::InstallFinished {
+                version, result, ..
+            } => match result {
+                Ok(()) => {
+                    app.pending_update = None;
+                    app.update_status = UpdateStatus::Updated {
+                        version: version.clone(),
+                    };
+                    app.push_event(NetworkEvent::new(
+                        NetworkEventKind::UpdateInstalled,
+                        EventSeverity::Info,
+                        format!("Updated binary to v{version}. Restart lazyifconfig to use it."),
+                    ));
+                }
+                Err(err) => {
+                    app.update_status = UpdateStatus::Error {
+                        message: err.clone(),
+                    };
+                    app.push_event(NetworkEvent::new(
+                        NetworkEventKind::UpdateCheckFailed,
+                        EventSeverity::Error,
+                        format!("Update install failed for v{version}: {err}"),
+                    ));
+                }
+            },
+        }
+    }
+}
+
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -318,6 +556,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
+                if app.release_notes_viewer.active {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('R') => {
+                            app.release_notes_viewer.active = false;
+                        }
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            app.release_notes_viewer.scroll =
+                                app.release_notes_viewer.scroll.saturating_add(1);
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            app.release_notes_viewer.scroll =
+                                app.release_notes_viewer.scroll.saturating_sub(1);
+                        }
+                        KeyCode::PageDown => {
+                            app.release_notes_viewer.scroll =
+                                app.release_notes_viewer.scroll.saturating_add(12);
+                        }
+                        KeyCode::PageUp => {
+                            app.release_notes_viewer.scroll =
+                                app.release_notes_viewer.scroll.saturating_sub(12);
+                        }
+                        KeyCode::Home => {
+                            app.release_notes_viewer.scroll = 0;
+                        }
+                        KeyCode::End => {
+                            app.release_notes_viewer.scroll = u16::MAX;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 // --- Filter mode: intercept all input ---
                 if app.port_filter_active {
                     match key.code {
@@ -359,7 +629,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ViewMode::Connections => vec![CommandSourceId::NetstatConnections],
                             ViewMode::Ports => vec![CommandSourceId::LsofPorts],
                             ViewMode::Routes => vec![CommandSourceId::NetstatRoutes, CommandSourceId::DefaultRoute, CommandSourceId::PublicIp],
-                            ViewMode::Timeline => vec![CommandSourceId::Ifconfig, CommandSourceId::NetstatRoutes, CommandSourceId::DefaultRoute, CommandSourceId::PublicIp],
+                            ViewMode::Timeline => vec![CommandSourceId::Ifconfig, CommandSourceId::NetstatRoutes, CommandSourceId::DefaultRoute, CommandSourceId::PublicIp, CommandSourceId::GitHubRelease],
                         };
                         if !sources.is_empty() {
                             app.raw_viewer.active = true;
@@ -376,6 +646,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         app.help_visible = false;
                         let _ = tick_update(&mut app);
                         last_tick = std::time::Instant::now();
+                    }
+                    KeyCode::Char('u') | KeyCode::Char('ㅕ') => {
+                        app.help_visible = false;
+                        start_update_check(&mut app, true);
+                    }
+                    KeyCode::Char('U') => {
+                        app.help_visible = false;
+                        start_update_install(&mut app, true);
+                    }
+                    KeyCode::Char('R') => {
+                        app.help_visible = false;
+                        app.release_notes_viewer.active = true;
+                        app.release_notes_viewer.scroll = 0;
                     }
                     KeyCode::Char('j') | KeyCode::Down | KeyCode::Char('ㅓ') => {
                         app.select_next();
