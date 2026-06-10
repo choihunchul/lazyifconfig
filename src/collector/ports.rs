@@ -50,18 +50,11 @@ fn parse_ss_listening_ports(input: &str) -> Vec<ListeningPort> {
     let mut ports = Vec::new();
 
     for line in input.lines() {
-        if !is_ss_socket_row(line) {
+        let Some((proto, local_address, process)) = parse_ss_row_parts(line) else {
             continue;
-        }
+        };
 
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 5 {
-            continue;
-        }
-
-        let proto = parts[0].to_lowercase();
-        let (local_ip, local_port) = split_node_name(parts[4]);
-        let process = parts.get(6).copied().unwrap_or_default();
+        let (local_ip, local_port) = split_node_name(local_address);
         let command = parse_ss_command(process).unwrap_or_else(|| "-".to_string());
         let pid = parse_ss_pid(process).unwrap_or_else(|| "-".to_string());
 
@@ -79,11 +72,36 @@ fn parse_ss_listening_ports(input: &str) -> Vec<ListeningPort> {
 }
 
 fn is_ss_socket_row(line: &str) -> bool {
-    let mut parts = line.split_whitespace();
-    let Some(proto) = parts.next() else {
-        return false;
-    };
-    matches!(proto, "tcp" | "tcp6" | "udp" | "udp6") && parts.next().is_some()
+    parse_ss_row_parts(line).is_some()
+}
+
+fn parse_ss_row_parts(line: &str) -> Option<(String, &str, &str)> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    let first = parts.first().copied()?;
+
+    if matches!(first, "tcp" | "tcp6" | "udp" | "udp6") {
+        if parts.len() < 5 {
+            return None;
+        }
+        return Some((
+            first.to_lowercase(),
+            parts[4],
+            parts.get(6).copied().unwrap_or_default(),
+        ));
+    }
+
+    if first == "LISTEN" {
+        if parts.len() < 4 {
+            return None;
+        }
+        return Some((
+            "tcp".to_string(),
+            parts[3],
+            parts.get(5).copied().unwrap_or_default(),
+        ));
+    }
+
+    None
 }
 
 fn parse_ss_command(process: &str) -> Option<String> {
@@ -163,6 +181,34 @@ tcp LISTEN 0 511 [::]:8080 [::]:* users:((\"nginx\",pid=987,fd=6))
         assert_eq!(ports[0].command, "systemd-resolve");
         assert_eq!(ports[0].pid, "579");
         assert_eq!(ports[0].user, "-");
+
+        assert_eq!(ports[1].local_ip, "0.0.0.0");
+        assert_eq!(ports[1].local_port, "22");
+        assert_eq!(ports[1].command, "sshd");
+        assert_eq!(ports[1].pid, "123");
+
+        assert_eq!(ports[2].local_ip, "::");
+        assert_eq!(ports[2].local_port, "8080");
+        assert_eq!(ports[2].command, "nginx");
+        assert_eq!(ports[2].pid, "987");
+    }
+
+    #[test]
+    fn parses_headerless_ss_ltnp_rows() {
+        let input = "\
+LISTEN 0 4096 127.0.0.53%lo:53 0.0.0.0:* users:((\"systemd-resolve\",pid=579,fd=14))
+LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:((\"sshd\",pid=123,fd=3))
+LISTEN 0 511 [::]:8080 [::]:* users:((\"nginx\",pid=987,fd=6))
+";
+
+        let ports = parse_listening_ports(input);
+
+        assert_eq!(ports.len(), 3);
+        assert_eq!(ports[0].proto, "tcp");
+        assert_eq!(ports[0].local_ip, "127.0.0.53%lo");
+        assert_eq!(ports[0].local_port, "53");
+        assert_eq!(ports[0].command, "systemd-resolve");
+        assert_eq!(ports[0].pid, "579");
 
         assert_eq!(ports[1].local_ip, "0.0.0.0");
         assert_eq!(ports[1].local_port, "22");
