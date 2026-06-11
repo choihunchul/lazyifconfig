@@ -697,6 +697,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     KeyCode::Char('k') | KeyCode::Up | KeyCode::Char('ㅏ') => {
                         app.select_previous();
                     }
+                    KeyCode::Char('l') | KeyCode::Right | KeyCode::Char('ㅣ') => {
+                        app.help_visible = false;
+                        app.select_next_view_mode();
+                    }
+                    KeyCode::Char('h') | KeyCode::Left | KeyCode::Char('ㅗ') => {
+                        app.help_visible = false;
+                        app.select_previous_view_mode();
+                    }
                     KeyCode::Char('K') => {
                         app.help_visible = false;
                         if app.view_mode == ViewMode::Ports {
@@ -736,6 +744,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         app.help_visible = false;
                         if app.view_mode == ViewMode::Ports {
                             app.port_filter_active = true;
+                        }
+                    }
+                    KeyCode::Char('s') | KeyCode::Char('ㄴ') => {
+                        app.help_visible = false;
+                        if app.view_mode == ViewMode::Ports {
+                            app.cycle_port_sort_column();
+                        }
+                    }
+                    KeyCode::Char('S') => {
+                        app.help_visible = false;
+                        if app.view_mode == ViewMode::Ports {
+                            app.toggle_port_sort_direction();
                         }
                     }
                     KeyCode::Char('a') | KeyCode::Char('ㅁ') => {

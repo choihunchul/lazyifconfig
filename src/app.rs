@@ -14,6 +14,30 @@ pub enum ViewMode {
     Routes,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PortSortColumn {
+    Port,
+    Command,
+    Pid,
+    User,
+    Proto,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortDirection {
+    Ascending,
+    Descending,
+}
+
+const VIEW_MODE_TABS: [ViewMode; 6] = [
+    ViewMode::Interface,
+    ViewMode::Network,
+    ViewMode::Ports,
+    ViewMode::Connections,
+    ViewMode::Routes,
+    ViewMode::Timeline,
+];
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NavigationItem {
     Interface {
@@ -70,6 +94,8 @@ pub struct App {
     pub details_scroll: u16,
     pub port_filter: String,
     pub port_filter_active: bool,
+    pub port_sort_column: PortSortColumn,
+    pub port_sort_direction: SortDirection,
     pub public_ip_info: std::sync::Arc<std::sync::Mutex<Option<PublicIpInfo>>>,
     pub current_public_ip_info: Option<PublicIpInfo>,
     pub last_public_ip_fetch: Option<std::time::Instant>,
@@ -125,6 +151,8 @@ impl Default for App {
             details_scroll: 0,
             port_filter: String::new(),
             port_filter_active: false,
+            port_sort_column: PortSortColumn::Port,
+            port_sort_direction: SortDirection::Ascending,
             public_ip_info: std::sync::Arc::new(std::sync::Mutex::new(None)),
             current_public_ip_info: None,
             last_public_ip_fetch: None,
@@ -204,6 +232,13 @@ impl App {
         }
     }
 
+    fn selected_listening_port_index(&self) -> Option<usize> {
+        match self.navigation_items.get(self.selected_index)? {
+            NavigationItem::ListeningPort { index, .. } => Some(*index),
+            _ => None,
+        }
+    }
+
     pub fn set_view_mode(&mut self, mode: ViewMode) {
         if self.view_mode == mode {
             return;
@@ -215,6 +250,67 @@ impl App {
         self.port_filter_active = false;
         self.update_navigation_items();
         self.restore_selection(selected_name.as_deref());
+    }
+
+    pub fn select_next_view_mode(&mut self) {
+        let current_index = VIEW_MODE_TABS
+            .iter()
+            .position(|mode| *mode == self.view_mode)
+            .unwrap_or(0);
+        let next_index = (current_index + 1) % VIEW_MODE_TABS.len();
+        self.set_view_mode(VIEW_MODE_TABS[next_index]);
+    }
+
+    pub fn select_previous_view_mode(&mut self) {
+        let current_index = VIEW_MODE_TABS
+            .iter()
+            .position(|mode| *mode == self.view_mode)
+            .unwrap_or(0);
+        let previous_index = if current_index == 0 {
+            VIEW_MODE_TABS.len() - 1
+        } else {
+            current_index - 1
+        };
+        self.set_view_mode(VIEW_MODE_TABS[previous_index]);
+    }
+
+    pub fn cycle_port_sort_column(&mut self) {
+        let selected_port_index = self.selected_listening_port_index();
+        self.port_sort_column = match self.port_sort_column {
+            PortSortColumn::Port => PortSortColumn::Command,
+            PortSortColumn::Command => PortSortColumn::Pid,
+            PortSortColumn::Pid => PortSortColumn::User,
+            PortSortColumn::User => PortSortColumn::Proto,
+            PortSortColumn::Proto => PortSortColumn::Port,
+        };
+        self.port_sort_direction = SortDirection::Ascending;
+        self.update_navigation_items();
+        self.restore_selected_listening_port(selected_port_index);
+    }
+
+    pub fn toggle_port_sort_direction(&mut self) {
+        let selected_port_index = self.selected_listening_port_index();
+        self.port_sort_direction = match self.port_sort_direction {
+            SortDirection::Ascending => SortDirection::Descending,
+            SortDirection::Descending => SortDirection::Ascending,
+        };
+        self.update_navigation_items();
+        self.restore_selected_listening_port(selected_port_index);
+    }
+
+    fn restore_selected_listening_port(&mut self, selected_port_index: Option<usize>) {
+        if let Some(selected_port_index) = selected_port_index {
+            if let Some(index) = self.navigation_items.iter().position(|item| {
+                matches!(item, NavigationItem::ListeningPort { index, .. } if *index == selected_port_index)
+            }) {
+                self.selected_index = index;
+                return;
+            }
+        }
+
+        if self.selected_index >= self.navigation_items.len() {
+            self.selected_index = self.navigation_items.len().saturating_sub(1);
+        }
     }
 
     pub fn update_raw_viewer_search_matches(&mut self) {
@@ -367,7 +463,7 @@ impl App {
             ViewMode::Ports => {
                 let snapshot = snapshot.unwrap();
                 let query = self.port_filter.to_lowercase();
-                self.navigation_items = snapshot
+                let mut items: Vec<_> = snapshot
                     .listening_ports
                     .iter()
                     .enumerate()
@@ -390,6 +486,12 @@ impl App {
                         index: idx,
                     })
                     .collect();
+                sort_listening_port_items(
+                    &mut items,
+                    self.port_sort_column,
+                    self.port_sort_direction,
+                );
+                self.navigation_items = items;
             }
             ViewMode::Timeline => {
                 self.navigation_items = self
@@ -674,6 +776,72 @@ impl App {
             self.recent_events.drain(0..overflow);
         }
     }
+}
+
+fn sort_listening_port_items(
+    items: &mut [NavigationItem],
+    column: PortSortColumn,
+    direction: SortDirection,
+) {
+    items.sort_by(|a, b| {
+        let ordering = compare_listening_port_items(a, b, column);
+        match direction {
+            SortDirection::Ascending => ordering,
+            SortDirection::Descending => ordering.reverse(),
+        }
+    });
+}
+
+fn compare_listening_port_items(
+    a: &NavigationItem,
+    b: &NavigationItem,
+    column: PortSortColumn,
+) -> std::cmp::Ordering {
+    let (
+        NavigationItem::ListeningPort {
+            proto: proto_a,
+            port: port_a,
+            command: command_a,
+            pid: pid_a,
+            user: user_a,
+            ..
+        },
+        NavigationItem::ListeningPort {
+            proto: proto_b,
+            port: port_b,
+            command: command_b,
+            pid: pid_b,
+            user: user_b,
+            ..
+        },
+    ) = (a, b)
+    else {
+        return std::cmp::Ordering::Equal;
+    };
+
+    let primary = match column {
+        PortSortColumn::Port => compare_numeric_text(port_a, port_b),
+        PortSortColumn::Command => compare_text(command_a, command_b),
+        PortSortColumn::Pid => compare_numeric_text(pid_a, pid_b),
+        PortSortColumn::User => compare_text(user_a, user_b),
+        PortSortColumn::Proto => compare_text(proto_a, proto_b),
+    };
+
+    primary
+        .then_with(|| compare_numeric_text(port_a, port_b))
+        .then_with(|| compare_text(command_a, command_b))
+        .then_with(|| compare_numeric_text(pid_a, pid_b))
+}
+
+fn compare_numeric_text(a: &str, b: &str) -> std::cmp::Ordering {
+    match (a.parse::<u64>(), b.parse::<u64>()) {
+        (Ok(a), Ok(b)) => a.cmp(&b),
+        _ => compare_text(a, b),
+    }
+}
+
+fn compare_text(a: &str, b: &str) -> std::cmp::Ordering {
+    a.to_lowercase().cmp(&b.to_lowercase())
 }
 
   fn calculate_ipv4_subnet(ip: &Ipv4Addr, prefix_len: u8) -> Ipv4Addr {

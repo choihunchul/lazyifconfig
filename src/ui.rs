@@ -4,10 +4,10 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Sparkline, Wrap},
+    widgets::{Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Sparkline, Table, Wrap},
     Frame,
 };
-use crate::app::{App, NavigationItem, ViewMode};
+use crate::app::{App, NavigationItem, PortSortColumn, SortDirection, ViewMode};
 use crate::model::{InterfaceStatus, Subnet, NetworkKind};
 use chrono::{DateTime, Local};
 
@@ -114,7 +114,10 @@ fn get_status_text(app: &App) -> String {
             if app.port_filter_active {
                 " filter: type | Enter apply | Esc clear | Backspace delete ".to_string()
             } else {
-                " q | u check | U update | R notes | f filter | K kill | r | [/] | i/n/c/e/g ".to_string()
+                format!(
+                    " q | r | f filter | s sort | S dir | K kill | sort:{} | [/] | i/n/c/e/g ",
+                    port_sort_label(app)
+                )
             }
         }
         ViewMode::Timeline => {
@@ -130,6 +133,23 @@ fn get_status_text(app: &App) -> String {
             )
         }
     }
+}
+
+fn port_sort_label(app: &App) -> String {
+    format!(
+        "{} {}",
+        match app.port_sort_column {
+            PortSortColumn::Port => "Port",
+            PortSortColumn::Command => "Command",
+            PortSortColumn::Pid => "PID",
+            PortSortColumn::User => "User",
+            PortSortColumn::Proto => "Proto",
+        },
+        match app.port_sort_direction {
+            SortDirection::Ascending => "asc",
+            SortDirection::Descending => "desc",
+        }
+    )
 }
 
 fn view_tabs(view_mode: ViewMode) -> Line<'static> {
@@ -298,8 +318,12 @@ pub fn draw(frame: &mut Frame, app: &App) {
             }
         }
     }
-    let list_widget = List::new(list_items).block(list_block);
-    frame.render_widget(list_widget, top_chunks[0]);
+    if app.view_mode == ViewMode::Ports {
+        render_ports_table(frame, app, list_block, top_chunks[0]);
+    } else {
+        let list_widget = List::new(list_items).block(list_block);
+        frame.render_widget(list_widget, top_chunks[0]);
+    }
 
     // 2. Right Pane: Details Panel
     let details_block = Block::default()
@@ -829,6 +853,80 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
 }
 
+fn render_ports_table(frame: &mut Frame, app: &App, block: Block<'_>, area: Rect) {
+    let header = Row::new([
+        Cell::from(port_header_label(app, PortSortColumn::Proto, "Proto")),
+        Cell::from(port_header_label(app, PortSortColumn::Port, "Port")),
+        Cell::from(port_header_label(app, PortSortColumn::Command, "Command")),
+        Cell::from(port_header_label(app, PortSortColumn::Pid, "PID")),
+        Cell::from(port_header_label(app, PortSortColumn::User, "User")),
+    ])
+    .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+
+    let rows = app
+        .navigation_items
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, item)| {
+            let NavigationItem::ListeningPort {
+                proto,
+                port,
+                command,
+                pid,
+                user,
+                ..
+            } = item
+            else {
+                return None;
+            };
+
+            let style = if idx == app.selected_index {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            Some(
+                Row::new([
+                    Cell::from(proto.to_uppercase()),
+                    Cell::from(port.clone()),
+                    Cell::from(command.clone()),
+                    Cell::from(pid.clone()),
+                    Cell::from(user.clone()),
+                ])
+                .style(style),
+            )
+        });
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(5),
+            Constraint::Length(6),
+            Constraint::Min(8),
+            Constraint::Length(7),
+            Constraint::Length(8),
+        ],
+    )
+    .header(header)
+    .column_spacing(1)
+    .block(block);
+
+    frame.render_widget(table, area);
+}
+
+fn port_header_label(app: &App, column: PortSortColumn, label: &str) -> String {
+    if app.port_sort_column != column {
+        return label.to_string();
+    }
+
+    let arrow = match app.port_sort_direction {
+        SortDirection::Ascending => "↑",
+        SortDirection::Descending => "↓",
+    };
+    format!("{label} {arrow}")
+}
+
 fn draw_help(frame: &mut Frame) {
     let area = get_centered_rect(54, 42, frame.size());
     let block = Block::default()
@@ -846,8 +944,8 @@ fn draw_help(frame: &mut Frame) {
         Line::from("p ports      e timeline g routes"),
         Line::from("u check updates   U apply update"),
         Line::from("R release notes    Esc close popup"),
-        Line::from("o raw output ? help     Esc close"),
-        Line::from("j/k or arrows move      [/]: details scroll"),
+        Line::from("o raw output ? help     s sort S dir"),
+        Line::from("j/k up/down  h/l tabs   [/]: details scroll"),
     ];
     let help = Paragraph::new(lines)
         .wrap(Wrap { trim: true })
@@ -1451,6 +1549,43 @@ mod tests {
         assert!(rendered.contains("Lazyifconfig"));
         assert!(rendered.contains(" - "));
         assert!(rendered.contains(os_display_label()));
+    }
+
+    #[test]
+    fn test_ports_view_renders_table_columns() {
+        let mut app = App::default();
+        app.view_mode = ViewMode::Ports;
+        app.navigation_items = vec![NavigationItem::ListeningPort {
+            proto: "tcp".to_string(),
+            port: "8080".to_string(),
+            command: "my-server".to_string(),
+            pid: "12345".to_string(),
+            user: "alice".to_string(),
+            index: 0,
+        }];
+
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let mut left_pane = String::new();
+        for y in 0..24 {
+            for x in 0..48 {
+                left_pane.push_str(buffer.get(x, y).symbol());
+            }
+        }
+
+        assert!(left_pane.contains("Proto"));
+        assert!(left_pane.contains("Port ↑"));
+        assert!(left_pane.contains("Command"));
+        assert!(left_pane.contains("PID"));
+        assert!(left_pane.contains("User"));
+        assert!(left_pane.contains("TCP"));
+        assert!(left_pane.contains("8080"));
+        assert!(left_pane.contains("my-server"));
+        assert!(left_pane.contains("12345"));
+        assert!(left_pane.contains("alice"));
     }
 
     #[test]

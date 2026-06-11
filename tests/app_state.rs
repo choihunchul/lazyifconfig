@@ -1,7 +1,7 @@
 use lazyifconfig::app::App;
 use lazyifconfig::model::{
     InterfaceAddress, InterfaceStats, InterfaceStatus, InterfaceType, NetworkEvent,
-    NetworkInterface, NetworkSnapshot,
+    ListeningPort, NetworkInterface, NetworkSnapshot,
 };
 
 #[test]
@@ -82,6 +82,87 @@ fn selected_rates_are_computed_from_consecutive_snapshots() {
     ));
 
     assert_eq!(app.selected_rates(), Some((120, 60)));
+}
+
+#[test]
+fn view_mode_cycles_in_top_tab_order() {
+    let mut app = App::default();
+
+    app.select_next_view_mode();
+    assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Network);
+
+    app.select_next_view_mode();
+    assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Ports);
+
+    app.select_next_view_mode();
+    assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Connections);
+
+    app.select_next_view_mode();
+    assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Routes);
+
+    app.select_next_view_mode();
+    assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Timeline);
+
+    app.select_next_view_mode();
+    assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Interface);
+
+    app.select_previous_view_mode();
+    assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Timeline);
+}
+
+#[test]
+fn ports_filter_then_sort_by_port_number() {
+    let mut app = App::default();
+    app.view_mode = lazyifconfig::app::ViewMode::Ports;
+    app.port_filter = "server".to_string();
+
+    app.replace_snapshot(snapshot_with_ports(vec![
+        listening_port("tcp", "9000", "server-b", "300", "alice"),
+        listening_port("tcp", "443", "client", "100", "bob"),
+        listening_port("tcp", "8080", "server-a", "200", "carol"),
+    ]));
+
+    let ports: Vec<String> = app
+        .navigation_items
+        .iter()
+        .map(|item| match item {
+            lazyifconfig::app::NavigationItem::ListeningPort { port, .. } => port.clone(),
+            other => panic!("expected port item, got {other:?}"),
+        })
+        .collect();
+
+    assert_eq!(ports, vec!["8080", "9000"]);
+}
+
+#[test]
+fn ports_sort_column_cycles_and_direction_toggles() {
+    let mut app = App::default();
+    app.view_mode = lazyifconfig::app::ViewMode::Ports;
+    app.replace_snapshot(snapshot_with_ports(vec![
+        listening_port("tcp", "9000", "zulu", "300", "alice"),
+        listening_port("tcp", "8080", "alpha", "200", "carol"),
+    ]));
+
+    app.cycle_port_sort_column();
+    assert_eq!(app.port_sort_column, lazyifconfig::app::PortSortColumn::Command);
+    assert_eq!(app.port_sort_direction, lazyifconfig::app::SortDirection::Ascending);
+
+    app.update_navigation_items();
+    let first_command = match &app.navigation_items[0] {
+        lazyifconfig::app::NavigationItem::ListeningPort { command, .. } => command.as_str(),
+        other => panic!("expected port item, got {other:?}"),
+    };
+    assert_eq!(first_command, "alpha");
+
+    app.toggle_port_sort_direction();
+    assert_eq!(app.port_sort_direction, lazyifconfig::app::SortDirection::Descending);
+
+    app.update_navigation_items();
+    let first_command = match &app.navigation_items[0] {
+        lazyifconfig::app::NavigationItem::ListeningPort { command, .. } => command.as_str(),
+        other => panic!("expected port item, got {other:?}"),
+    };
+    assert_eq!(first_command, "zulu");
 }
 
 #[test]
@@ -216,6 +297,27 @@ fn snapshot_with_interfaces(captured_at_secs: u64, interfaces: Vec<NetworkInterf
         listening_ports: vec![],
         routes: vec![],
         captured_at_secs,
+    }
+}
+
+fn snapshot_with_ports(listening_ports: Vec<ListeningPort>) -> NetworkSnapshot {
+    NetworkSnapshot {
+        interfaces: vec![],
+        connections: vec![],
+        listening_ports,
+        routes: vec![],
+        captured_at_secs: 10,
+    }
+}
+
+fn listening_port(proto: &str, local_port: &str, command: &str, pid: &str, user: &str) -> ListeningPort {
+    ListeningPort {
+        proto: proto.to_string(),
+        local_ip: "0.0.0.0".to_string(),
+        local_port: local_port.to_string(),
+        pid: pid.to_string(),
+        command: command.to_string(),
+        user: user.to_string(),
     }
 }
 
@@ -515,5 +617,3 @@ fn test_raw_viewer_search_highlights() {
     assert!(line_content.is_char_boundary(m.end_byte));
     assert_eq!(&line_content[m.start_byte..m.end_byte], "테스트");
 }
-
-
