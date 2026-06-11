@@ -391,6 +391,8 @@ impl CommandSourceId {
             CommandSourceId::Ifconfig => {
                 if cfg!(target_os = "linux") {
                     "ip -details -statistics address show"
+                } else if cfg!(target_os = "windows") {
+                    "ipconfig /all"
                 } else {
                     "ifconfig"
                 }
@@ -398,6 +400,8 @@ impl CommandSourceId {
             CommandSourceId::NetstatRoutes => {
                 if cfg!(target_os = "linux") {
                     "ip route show"
+                } else if cfg!(target_os = "windows") {
+                    "route PRINT"
                 } else {
                     "netstat -rn"
                 }
@@ -405,6 +409,8 @@ impl CommandSourceId {
             CommandSourceId::DefaultRoute => {
                 if cfg!(target_os = "linux") {
                     "ip route show default"
+                } else if cfg!(target_os = "windows") {
+                    "route PRINT 0.0.0.0"
                 } else {
                     "route -n get default"
                 }
@@ -416,6 +422,8 @@ impl CommandSourceId {
             CommandSourceId::LsofPorts => {
                 if cfg!(target_os = "linux") {
                     "ss -H -ltnp"
+                } else if cfg!(target_os = "windows") {
+                    "netstat -ano -p tcp"
                 } else {
                     "lsof -iTCP -sTCP:LISTEN -P -n"
                 }
@@ -436,4 +444,30 @@ pub struct CommandOutput {
     pub stderr: String,
     pub executed_at: std::time::SystemTime,
     pub exit_code: Option<i32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_source_labels_follow_platform() {
+        let interface = if cfg!(target_os = "linux") {
+            "ip -details -statistics address show"
+        } else if cfg!(target_os = "windows") {
+            "ipconfig /all"
+        } else {
+            "ifconfig"
+        };
+        assert_eq!(CommandSourceId::Ifconfig.as_str(), interface);
+
+        let ports = if cfg!(target_os = "linux") {
+            "ss -H -ltnp"
+        } else if cfg!(target_os = "windows") {
+            "netstat -ano -p tcp"
+        } else {
+            "lsof -iTCP -sTCP:LISTEN -P -n"
+        };
+        assert_eq!(CommandSourceId::LsofPorts.as_str(), ports);
+    }
 }

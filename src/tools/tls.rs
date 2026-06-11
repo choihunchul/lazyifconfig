@@ -10,15 +10,12 @@ use super::{ToolCommandSpec, ToolInput, ToolResult, ToolResultSection};
 
 pub fn command_spec(host: &str, port: u16) -> ToolCommandSpec {
     ToolCommandSpec {
-        display: format!("openssl s_client -connect {host}:{port} -servername {host} -showcerts"),
-        program: "openssl".to_string(),
+        display: format!("native rustls TLS handshake {host}:{port}"),
+        program: "lazyifconfig".to_string(),
         args: vec![
-            "s_client".to_string(),
-            "-connect".to_string(),
+            "tools".to_string(),
+            "tls".to_string(),
             format!("{host}:{port}"),
-            "-servername".to_string(),
-            host.to_string(),
-            "-showcerts".to_string(),
         ],
     }
 }

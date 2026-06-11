@@ -175,6 +175,8 @@ fn get_active_command(view_mode: ViewMode) -> &'static str {
         ViewMode::Interface | ViewMode::Network => {
             if cfg!(target_os = "linux") {
                 "ip -details -statistics address show"
+            } else if cfg!(target_os = "windows") {
+                "ipconfig /all"
             } else {
                 "ifconfig"
             }
@@ -183,6 +185,8 @@ fn get_active_command(view_mode: ViewMode) -> &'static str {
         ViewMode::Ports => {
             if cfg!(target_os = "linux") {
                 "ss -H -ltnp"
+            } else if cfg!(target_os = "windows") {
+                "netstat -ano -p tcp"
             } else {
                 "lsof -iTCP -sTCP:LISTEN -P -n"
             }
@@ -190,6 +194,8 @@ fn get_active_command(view_mode: ViewMode) -> &'static str {
         ViewMode::Routes => {
             if cfg!(target_os = "linux") {
                 "ip route show"
+            } else if cfg!(target_os = "windows") {
+                "route PRINT"
             } else {
                 "netstat -rn"
             }
@@ -1355,6 +1361,8 @@ mod tests {
     fn test_get_active_command() {
         let interface_command = if cfg!(target_os = "linux") {
             "ip -details -statistics address show"
+        } else if cfg!(target_os = "windows") {
+            "ipconfig /all"
         } else {
             "ifconfig"
         };
@@ -1363,12 +1371,16 @@ mod tests {
         assert_eq!(get_active_command(ViewMode::Connections), "netstat -an");
         let ports_command = if cfg!(target_os = "linux") {
             "ss -H -ltnp"
+        } else if cfg!(target_os = "windows") {
+            "netstat -ano -p tcp"
         } else {
             "lsof -iTCP -sTCP:LISTEN -P -n"
         };
         assert_eq!(get_active_command(ViewMode::Ports), ports_command);
         let route_command = if cfg!(target_os = "linux") {
             "ip route show"
+        } else if cfg!(target_os = "windows") {
+            "route PRINT"
         } else {
             "netstat -rn"
         };

@@ -247,6 +247,18 @@ impl DnsParseResult {
 }
 
 pub fn command_candidates(target: &str) -> Vec<ToolCommandSpec> {
+    command_candidates_for_os(std::env::consts::OS, target)
+}
+
+pub fn command_candidates_for_os(os: &str, target: &str) -> Vec<ToolCommandSpec> {
+    if os == "windows" {
+        return vec![ToolCommandSpec {
+            display: format!("nslookup {target}"),
+            program: "nslookup".to_string(),
+            args: vec![target.to_string()],
+        }];
+    }
+
     vec![
         ToolCommandSpec {
             display: format!("dig {target}"),
@@ -352,6 +364,7 @@ fn parse_dns_output(
             parse_server_address_hint(line, &mut result);
         }
     }
+    parse_nslookup_records(query, &combined_lines, &mut result);
 
     result.status = detect_status(code, &combined_lines, &result);
     if let Some(server) = &result.dns_server {
@@ -377,6 +390,75 @@ fn parse_dns_output(
     }
 
     result
+}
+
+fn parse_nslookup_records(query: &str, lines: &[&str], result: &mut DnsParseResult) {
+    let mut current_host = None;
+    let mut in_addresses = false;
+
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("non-authoritative answer:") {
+            continue;
+        }
+
+        if let Some(value) = trimmed.strip_prefix("Name:") {
+            current_host = Some(trim_trailing_dot(value.trim()));
+            in_addresses = false;
+            continue;
+        }
+
+        if let Some(value) = trimmed.strip_prefix("Addresses:") {
+            in_addresses = true;
+            if let Some(ip) = parse_clean_ip(value.trim()) {
+                push_nslookup_record(query, current_host.as_deref(), ip, result);
+            }
+            continue;
+        }
+
+        if let Some(value) = trimmed.strip_prefix("Address:") {
+            if current_host.is_some() {
+                if let Some(ip) = parse_clean_ip(value.trim()) {
+                    push_nslookup_record(query, current_host.as_deref(), ip, result);
+                }
+            }
+            continue;
+        }
+
+        if in_addresses {
+            if let Some(ip) = parse_clean_ip(trimmed) {
+                push_nslookup_record(query, current_host.as_deref(), ip, result);
+            }
+        }
+    }
+}
+
+fn push_nslookup_record(
+    query: &str,
+    host: Option<&str>,
+    value: String,
+    result: &mut DnsParseResult,
+) {
+    let record = DnsRecord {
+        host: host.unwrap_or(query).to_string(),
+        value,
+        ttl: None,
+    };
+    if record.value.contains(':') {
+        if !result
+            .aaaa_records
+            .iter()
+            .any(|existing| existing.value == record.value)
+        {
+            result.aaaa_records.push(record);
+        }
+    } else if !result
+        .a_records
+        .iter()
+        .any(|existing| existing.value == record.value)
+    {
+        result.a_records.push(record);
+    }
 }
 
 fn parse_dns_server(line: &str, result: &mut DnsParseResult, saw_hint: &mut bool) {
@@ -718,5 +800,30 @@ tameuscc.co.kr. 579 IN A 112.133.7.34
         let result = parse_dns_output("missing.example", output, "", Some(0), Some(20));
         assert_eq!(result.status, DnsStatus::NotFound);
         assert_eq!(result.a_records.len(), 0);
+    }
+
+    #[test]
+    fn parses_windows_nslookup_output() {
+        let output = "\
+Server:  UnKnown
+Address:  192.168.0.1
+
+Name:    example.com
+Addresses:  2606:4700:10::6814:179a
+          2606:4700:10::ac42:93f3
+          172.66.147.243
+          104.20.23.154
+
+Non-authoritative answer:
+";
+
+        let result = parse_dns_output("example.com", output, "", Some(0), Some(141));
+
+        assert_eq!(result.status, DnsStatus::Success);
+        assert_eq!(result.dns_server.as_deref(), Some("192.168.0.1"));
+        assert_eq!(result.aaaa_records.len(), 2);
+        assert_eq!(result.a_records.len(), 2);
+        assert_eq!(result.a_records[0].host, "example.com");
+        assert_eq!(result.a_records[0].value, "172.66.147.243");
     }
 }

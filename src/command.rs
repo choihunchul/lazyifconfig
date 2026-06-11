@@ -259,10 +259,17 @@ pub fn run_lsof_listening() -> Result<String, String> {
 }
 
 pub fn run_whois(ip: &str) -> Result<String, String> {
+    if std::env::consts::OS == "windows" {
+        return run_rdap_text_lookup(ip, "local whois skipped on Windows");
+    }
+
     use std::process::Command;
     let mut cmd = Command::new("whois");
     cmd.arg(ip);
-    let output = cmd.output().map_err(|e| e.to_string())?;
+    let output = match cmd.output() {
+        Ok(output) => output,
+        Err(err) => return run_rdap_text_lookup(ip, &err.to_string()),
+    };
 
     if output.status.success() {
         String::from_utf8(output.stdout).map_err(|e| e.to_string())
@@ -276,11 +283,37 @@ pub fn run_whois(ip: &str) -> Result<String, String> {
     }
 }
 
+fn run_rdap_text_lookup(target: &str, whois_error: &str) -> Result<String, String> {
+    let kind = if target.parse::<std::net::IpAddr>().is_ok() {
+        "ip"
+    } else {
+        "domain"
+    };
+    let url = format!("https://rdap.org/{kind}/{target}");
+    let output = run_command_capture("curl", &["-sS", "-L", "-m", "10", &url])?;
+
+    if output.exit_code == Some(0) && !output.stdout.trim().is_empty() {
+        Ok(format!(
+            "{}\n\nRDAP fallback used because local whois failed: {}",
+            output.stdout.trim(),
+            whois_error
+        ))
+    } else if !output.stderr.trim().is_empty() {
+        Err(output.stderr)
+    } else {
+        Err(format!(
+            "RDAP lookup failed with status {:?}",
+            output.exit_code
+        ))
+    }
+}
+
 pub fn copy_to_clipboard(text: &str) -> Result<(), String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
-    let mut child = Command::new("pbcopy")
+    let program = clipboard_command_for_os(std::env::consts::OS);
+    let mut child = Command::new(program)
         .stdin(Stdio::piped())
         .spawn()
         .map_err(|e| e.to_string())?;
@@ -293,6 +326,16 @@ pub fn copy_to_clipboard(text: &str) -> Result<(), String> {
 
     child.wait().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+pub fn clipboard_command_for_os(os: &str) -> &'static str {
+    if os == "windows" {
+        "clip"
+    } else if os == "linux" {
+        "xclip"
+    } else {
+        "pbcopy"
+    }
 }
 
 pub fn save_timeline_events_to_file(events: &[NetworkEvent]) -> Result<std::path::PathBuf, String> {
@@ -329,16 +372,30 @@ pub fn save_timeline_events_to_file(events: &[NetworkEvent]) -> Result<std::path
 }
 
 pub fn run_kill(pid: &str) -> Result<(), String> {
-    use std::process::Command;
-    let output = Command::new("kill")
-        .args(["-9", pid])
-        .output()
-        .map_err(|e| e.to_string())?;
+    let spec = kill_command_spec_for_os(std::env::consts::OS, pid);
+    let args: Vec<&str> = spec.args.iter().map(String::as_str).collect();
+    let output = run_command_capture(&spec.program, &args)?;
 
-    if output.status.success() {
+    if output.exit_code == Some(0) {
         Ok(())
     } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        Err(output.stderr.trim().to_string())
+    }
+}
+
+pub fn kill_command_spec_for_os(os: &str, pid: &str) -> OwnedCommandSpec {
+    if os == "windows" {
+        OwnedCommandSpec {
+            display: format!("taskkill /PID {pid} /F"),
+            program: "taskkill".to_string(),
+            args: vec!["/PID".to_string(), pid.to_string(), "/F".to_string()],
+        }
+    } else {
+        OwnedCommandSpec {
+            display: format!("kill -9 {pid}"),
+            program: "kill".to_string(),
+            args: vec!["-9".to_string(), pid.to_string()],
+        }
     }
 }
 
@@ -488,6 +545,25 @@ mod tests {
         assert_eq!(command.display, "route PRINT 8.8.8.8");
         assert_eq!(command.program, "route");
         assert_eq!(command.args, vec!["PRINT", "8.8.8.8"]);
+    }
+
+    #[test]
+    fn clipboard_uses_platform_command() {
+        assert_eq!(clipboard_command_for_os("windows"), "clip");
+        assert_eq!(clipboard_command_for_os("macos"), "pbcopy");
+    }
+
+    #[test]
+    fn kill_command_uses_platform_command() {
+        let windows = kill_command_spec_for_os("windows", "1234");
+        assert_eq!(windows.display, "taskkill /PID 1234 /F");
+        assert_eq!(windows.program, "taskkill");
+        assert_eq!(windows.args, vec!["/PID", "1234", "/F"]);
+
+        let unix = kill_command_spec_for_os("linux", "1234");
+        assert_eq!(unix.display, "kill -9 1234");
+        assert_eq!(unix.program, "kill");
+        assert_eq!(unix.args, vec!["-9", "1234"]);
     }
 
     #[test]

@@ -60,10 +60,19 @@ async fn port_check_rejects_invalid_port() {
 fn dns_command_candidates_prefer_dig() {
     let candidates = lazyifconfig::tools::dns::command_candidates("example.com");
 
-    assert_eq!(candidates[0].program, "dig");
-    assert_eq!(candidates[0].args, vec!["example.com"]);
-    assert_eq!(candidates[1].program, "host");
-    assert_eq!(candidates[2].program, "nslookup");
+    if cfg!(target_os = "windows") {
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].program, "nslookup");
+    } else {
+        assert_eq!(candidates[0].program, "dig");
+        assert_eq!(candidates[0].args, vec!["example.com"]);
+        assert_eq!(candidates[1].program, "host");
+        assert_eq!(candidates[2].program, "nslookup");
+    }
+
+    let windows = lazyifconfig::tools::dns::command_candidates_for_os("windows", "example.com");
+    assert_eq!(windows.len(), 1);
+    assert_eq!(windows[0].program, "nslookup");
 }
 
 #[test]
@@ -92,27 +101,35 @@ fn whois_command_uses_standard_target_lookup() {
 fn ip_info_reverse_dns_candidates_prefer_dig_ptr() {
     let candidates = lazyifconfig::tools::ip_info::reverse_dns_command_candidates("8.8.8.8");
 
-    assert_eq!(candidates[0].program, "dig");
-    assert_eq!(candidates[0].args, vec!["-x", "8.8.8.8", "+short"]);
-    assert_eq!(candidates[1].program, "host");
+    if cfg!(target_os = "windows") {
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].program, "nslookup");
+    } else {
+        assert_eq!(candidates[0].program, "dig");
+        assert_eq!(candidates[0].args, vec!["-x", "8.8.8.8", "+short"]);
+        assert_eq!(candidates[1].program, "host");
+    }
+
+    let windows =
+        lazyifconfig::tools::ip_info::reverse_dns_command_candidates_for_os("windows", "8.8.8.8");
+    assert_eq!(windows.len(), 1);
+    assert_eq!(windows[0].program, "nslookup");
 }
 
 #[test]
 fn tls_command_uses_sni_for_host_and_port() {
     let spec = lazyifconfig::tools::tls::command_spec("github.com", 443);
 
-    assert_eq!(spec.program, "openssl");
+    assert_eq!(spec.program, "lazyifconfig");
     assert_eq!(
         spec.args,
         vec![
-            "s_client",
-            "-connect",
-            "github.com:443",
-            "-servername",
-            "github.com",
-            "-showcerts",
+            "tools".to_string(),
+            "tls".to_string(),
+            "github.com:443".to_string(),
         ]
     );
+    assert!(spec.display.contains("github.com:443"));
 }
 
 #[test]

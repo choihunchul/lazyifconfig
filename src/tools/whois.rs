@@ -18,6 +18,16 @@ pub async fn run(input: ToolInput) -> Result<ToolResult, String> {
         return Err("Target is required.".to_string());
     }
 
+    if std::env::consts::OS == "windows" {
+        let (raw_output, parsed) =
+            run_rdap_lookup(target, "local whois skipped on Windows").await?;
+        return Ok(ToolResult {
+            title: "Whois Lookup".to_string(),
+            sections: parsed,
+            raw_output,
+        });
+    }
+
     let spec = command_spec(target);
     let (raw_output, parsed) = match run_command(&spec).await {
         Ok((stdout, stderr, code)) => (
