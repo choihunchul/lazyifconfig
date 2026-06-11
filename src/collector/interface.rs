@@ -11,7 +11,8 @@ pub fn parse_interfaces(input: &str) -> Vec<NetworkInterface> {
     for line in input.lines() {
         if let Some(name) = parse_interface_header_name(line) {
             if let Some(mut interface) = current.take() {
-                interface.network_kind = classify_interface(&interface.name, &interface.ipv4, &interface.ipv6);
+                interface.network_kind =
+                    classify_interface(&interface.name, &interface.ipv4, &interface.ipv6);
                 interfaces.push(interface);
             }
 
@@ -98,7 +99,8 @@ pub fn parse_interfaces(input: &str) -> Vec<NetworkInterface> {
     }
 
     if let Some(mut interface) = current {
-        interface.network_kind = classify_interface(&interface.name, &interface.ipv4, &interface.ipv6);
+        interface.network_kind =
+            classify_interface(&interface.name, &interface.ipv4, &interface.ipv6);
         interfaces.push(interface);
     }
 
@@ -119,7 +121,11 @@ fn split_cidr_address(value: &str) -> (String, Option<u8>) {
     }
 }
 
-fn classify_interface(name: &str, ipv4: &[InterfaceAddress], ipv6: &[InterfaceAddress]) -> NetworkKind {
+fn classify_interface(
+    name: &str,
+    ipv4: &[InterfaceAddress],
+    ipv6: &[InterfaceAddress],
+) -> NetworkKind {
     // 1. Loopback
     if name == "lo0" || name.starts_with("lo") {
         return NetworkKind::Loopback;
@@ -140,7 +146,11 @@ fn classify_interface(name: &str, ipv4: &[InterfaceAddress], ipv6: &[InterfaceAd
     }
 
     // 2. VPN (utun, tun, tap, wg)
-    if name.starts_with("utun") || name.starts_with("tun") || name.starts_with("tap") || name.starts_with("wg") {
+    if name.starts_with("utun")
+        || name.starts_with("tun")
+        || name.starts_with("tap")
+        || name.starts_with("wg")
+    {
         return NetworkKind::Vpn;
     }
 

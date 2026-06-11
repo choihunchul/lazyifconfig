@@ -76,27 +76,51 @@ fn infers_interface_types_from_name_rules() {
     let mixed = parse_interfaces(include_str!("../fixtures/docker.txt"));
 
     assert_eq!(
-        wifi_like.iter().find(|item| item.name == "en0").unwrap().interface_type,
+        wifi_like
+            .iter()
+            .find(|item| item.name == "en0")
+            .unwrap()
+            .interface_type,
         InterfaceType::WifiOrEthernet
     );
     assert_eq!(
-        wifi_like.iter().find(|item| item.name == "lo0").unwrap().interface_type,
+        wifi_like
+            .iter()
+            .find(|item| item.name == "lo0")
+            .unwrap()
+            .interface_type,
         InterfaceType::Loopback
     );
     assert_eq!(
-        vpn_like.iter().find(|item| item.name == "utun4").unwrap().interface_type,
+        vpn_like
+            .iter()
+            .find(|item| item.name == "utun4")
+            .unwrap()
+            .interface_type,
         InterfaceType::Vpn
     );
     assert_eq!(
-        mixed.iter().find(|item| item.name == "bridge0").unwrap().interface_type,
+        mixed
+            .iter()
+            .find(|item| item.name == "bridge0")
+            .unwrap()
+            .interface_type,
         InterfaceType::Bridge
     );
     assert_eq!(
-        mixed.iter().find(|item| item.name == "awdl0").unwrap().interface_type,
+        mixed
+            .iter()
+            .find(|item| item.name == "awdl0")
+            .unwrap()
+            .interface_type,
         InterfaceType::AirDrop
     );
     assert_eq!(
-        mixed.iter().find(|item| item.name == "mystery0").unwrap().interface_type,
+        mixed
+            .iter()
+            .find(|item| item.name == "mystery0")
+            .unwrap()
+            .interface_type,
         InterfaceType::Unknown
     );
 }
@@ -125,12 +149,18 @@ fn test_network_classification_priority() {
     // utun은 사설 IP가 있어도 VPN으로 분류되어야 함
     let input = "utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n\tinet 10.8.0.2 netmask 0xffffff00";
     let parsed = parse_interfaces(input);
-    assert_eq!(parsed[0].network_kind, lazyifconfig::model::NetworkKind::Vpn);
+    assert_eq!(
+        parsed[0].network_kind,
+        lazyifconfig::model::NetworkKind::Vpn
+    );
 
     // en0에 사설 IP가 있으면 LAN
     let input2 = "en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n\tinet 192.168.0.15 netmask 0xffffff00";
     let parsed2 = parse_interfaces(input2);
-    assert_eq!(parsed2[0].network_kind, lazyifconfig::model::NetworkKind::Lan);
+    assert_eq!(
+        parsed2[0].network_kind,
+        lazyifconfig::model::NetworkKind::Lan
+    );
 }
 
 #[test]
@@ -157,7 +187,10 @@ fn test_gateway_parsing() {
     };
     let mut interfaces2 = vec![en0];
     lazyifconfig::collector::interface::merge_gateways(&mut interfaces2, netstat_input);
-    assert_eq!(interfaces2[0].ipv4[0].gateway, Some("192.168.0.1".to_string()));
+    assert_eq!(
+        interfaces2[0].ipv4[0].gateway,
+        Some("192.168.0.1".to_string())
+    );
 }
 
 #[test]
@@ -183,7 +216,10 @@ fn merges_linux_ip_route_default_gateway() {
         "default via 172.17.0.1 dev eth0 proto static",
     );
 
-    assert_eq!(interfaces[0].ipv4[0].gateway, Some("172.17.0.1".to_string()));
+    assert_eq!(
+        interfaces[0].ipv4[0].gateway,
+        Some("172.17.0.1".to_string())
+    );
 }
 
 #[test]

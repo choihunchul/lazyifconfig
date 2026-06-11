@@ -73,10 +73,7 @@ fn parse_linux_ip_routes(input: &str) -> Vec<RouteEntry> {
     routes
 }
 
-pub fn parse_linux_route_path(
-    destination: &str,
-    output: &str,
-) -> Result<RoutePathResult, String> {
+pub fn parse_linux_route_path(destination: &str, output: &str) -> Result<RoutePathResult, String> {
     let first_line = output.lines().next().unwrap_or("").trim();
     if first_line.is_empty() {
         return Err("route path output is empty".to_string());
