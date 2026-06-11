@@ -1,139 +1,67 @@
 name: Publish Homebrew Tap
 
 on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   workflow_dispatch:
     inputs:
-      version:
-        description: "Release version, for example 0.2.2 or v0.2.2"
+      tag:
+        description: "Release tag, for example v0.2.4"
         required: true
-        type: string
-      tap_repository:
-        description: "Homebrew tap repository, for example choihunchul/homebrew-tap"
-        required: true
-        default: "choihunchul/homebrew-tap"
         type: string
 
 permissions:
   contents: read
 
 jobs:
-  publish-tap:
-    name: Generate and publish Homebrew formula
+  resolve-release:
+    name: Resolve release tag
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') }}
     runs-on: ubuntu-latest
-    env:
-      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
     steps:
-      - name: Verify tap token exists
+      - name: Resolve release metadata
+        id: resolve
         shell: bash
+        env:
+          INPUT_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || '' }}
+          HEAD_BRANCH: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || '' }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          if [[ -z "${HOMEBREW_TAP_TOKEN:-}" ]]; then
-            echo "HOMEBREW_TAP_TOKEN secret is not configured" >&2
-            exit 1
+          if [[ -n "${INPUT_TAG}" ]]; then
+            raw_tag="${INPUT_TAG}"
+          elif [[ -n "${HEAD_BRANCH}" ]]; then
+            raw_tag="${HEAD_BRANCH}"
+          else
+            raw_tag="$(
+              curl -fsSL \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                "${GITHUB_API_URL}/repos/${{ github.repository }}/releases/latest" \
+              | jq -r '.tag_name'
+            )"
           fi
 
-      - name: Normalize release metadata
-        id: meta
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          raw_version="${{ inputs.version }}"
-          version="${raw_version#v}"
+          version="${raw_tag#v}"
           tag="v${version}"
-          base_url="https://github.com/choihunchul/lazyifconfig/releases/download/${tag}"
-          intel_file="lazyifconfig-${tag}-x86_64-apple-darwin.tar.gz"
-          arm_file="lazyifconfig-${tag}-aarch64-apple-darwin.tar.gz"
 
-          echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-          echo "intel_url=${base_url}/${intel_file}" >> "${GITHUB_OUTPUT}"
-          echo "arm_url=${base_url}/${arm_file}" >> "${GITHUB_OUTPUT}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
-      - name: Download release artifacts and compute checksums
-        id: shas
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          curl -fsSL -o lazyifconfig-intel.tar.gz "${{ steps.meta.outputs.intel_url }}"
-          curl -fsSL -o lazyifconfig-arm.tar.gz "${{ steps.meta.outputs.arm_url }}"
-
-          intel_sha="$(sha256sum lazyifconfig-intel.tar.gz | awk '{print $1}')"
-          arm_sha="$(sha256sum lazyifconfig-arm.tar.gz | awk '{print $1}')"
-
-          echo "intel_sha=${intel_sha}" >> "${GITHUB_OUTPUT}"
-          echo "arm_sha=${arm_sha}" >> "${GITHUB_OUTPUT}"
-
-      - name: Checkout tap repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ inputs.tap_repository }}
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          path: tap
-
-      - name: Write formula
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p tap/Formula
-          cat > tap/Formula/lazyifconfig.rb <<EOF
-          class Lazyifconfig < Formula
-            desc "Terminal UI for inspecting local network state"
-            homepage "https://github.com/choihunchul/lazyifconfig"
-            license "MIT"
-            version "${{ steps.meta.outputs.version }}"
-
-            on_macos do
-              on_intel do
-                url "${{ steps.meta.outputs.intel_url }}"
-                sha256 "${{ steps.shas.outputs.intel_sha }}"
-              end
-
-              on_arm do
-                url "${{ steps.meta.outputs.arm_url }}"
-                sha256 "${{ steps.shas.outputs.arm_sha }}"
-              end
-            end
-
-            def install
-              bin.install "lazyifconfig"
-            end
-
-            test do
-              assert_predicate bin/"lazyifconfig", :exist?
-            end
-          end
-          EOF
-
-      - name: Commit and push formula
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd tap
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          if git diff --quiet; then
-            echo "No formula changes detected"
-            exit 0
-          fi
-
-          git add Formula/lazyifconfig.rb
-          git commit -m "lazyifconfig ${{ steps.meta.outputs.tag }}"
-          git push origin HEAD
-
-      - name: Write summary
-        shell: bash
-        run: |
-          {
-            echo "## Homebrew tap publish"
-            echo
-            echo "- Version: \`${{ steps.meta.outputs.version }}\`"
-            echo "- Tap repository: \`${{ inputs.tap_repository }}\`"
-            echo "- Install command: \`brew tap ${{ inputs.tap_repository }} && brew install lazyifconfig\`"
-          } >> "${GITHUB_STEP_SUMMARY}"
+  publish-homebrew-tap:
+    name: Publish Homebrew formula
+    needs: resolve-release
+    uses: choihunchul/github--actions/.github/workflows/publish-homebrew-formula.yml@main
+    with:
+      source_repository: ${{ github.repository }}
+      tap_repository: choihunchul/homebrew-tap
+      formula_name: lazyifconfig
+      tag: ${{ needs.resolve-release.outputs.tag }}
+      verify_tag: false
+    secrets:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

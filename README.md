@@ -43,8 +43,7 @@ It combines local interface, route, connection, port, and public IP data into a 
 From Homebrew tap:
 
 ```bash
-brew tap choihunchul/homebrew-tap
-brew install lazyifconfig
+brew install choihunchul/tap/lazyifconfig
 ```
 
 From crates.io:
@@ -115,6 +114,9 @@ git tag v0.2.4
 git push origin v0.2.4
 ```
 
+After the `Release` workflow finishes, the Homebrew tap workflow runs automatically and updates `choihunchul/homebrew-tap`.
+You can also rerun `Publish Homebrew Tap` manually from GitHub Actions by providing a tag such as `0.2.4` or `v0.2.4`.
+
 You can also trigger the `Create Release Tag` workflow from GitHub Actions.
 Enter `0.2.4` or `v0.2.4` as the input, and it will:
 
@@ -129,14 +131,13 @@ Enter `0.2.4` or `v0.2.4`, and it will:
 - run `cargo publish --dry-run --locked`
 - optionally publish to crates.io with the `CARGO_REGISTRY_TOKEN` secret
 
-For Homebrew publishing, create a tap repository such as `choihunchul/homebrew-tap`,
-add a `HOMEBREW_TAP_TOKEN` secret with push access to that repo, then trigger
-the `Publish Homebrew Tap` workflow. It will:
+For Homebrew publishing, add a `HOMEBREW_TAP_TOKEN` secret with push access to
+`choihunchul/homebrew-tap`. The `Publish Homebrew Tap` workflow will:
 
-- download the macOS release tarballs for the selected tag
-- compute SHA-256 checksums
+- download the Linux, macOS Intel, and macOS ARM release tarballs for the selected tag
+- compute SHA-256 checksums for each platform
 - write `Formula/lazyifconfig.rb` into the tap repository
-- push the formula update so `brew tap ... && brew install lazyifconfig` works
+- push the formula update so `brew install choihunchul/tap/lazyifconfig` works
 
 The release workflow builds and uploads artifacts for:
 
