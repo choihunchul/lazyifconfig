@@ -182,6 +182,16 @@ fn diagnostics_find_down_and_missing_interfaces() {
 }
 
 #[test]
+fn diagnostics_report_missing_interface_with_empty_interface_snapshot() {
+    let routes = vec![route("default", "192.168.0.1", "en0", None)];
+    let diagnostics = build_route_diagnostics(&routes, &[]);
+
+    assert!(diagnostics
+        .iter()
+        .any(|item| item.title == "Route references missing interface"));
+}
+
+#[test]
 fn diagnostics_mark_vpn_default_as_info() {
     let routes = vec![route("default", "10.8.0.1", "utun4", None)];
     let diagnostics = build_route_diagnostics(&routes, &[]);

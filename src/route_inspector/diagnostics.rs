@@ -65,7 +65,7 @@ pub fn build_route_diagnostics(
                     "Bring the interface up or remove the stale route.",
                 ));
             }
-        } else if !interfaces.is_empty() && reported_missing.insert(route.interface.clone()) {
+        } else if reported_missing.insert(route.interface.clone()) {
             diagnostics.push(diagnostic(
                 RouteDiagnosticSeverity::Warning,
                 "Route references missing interface",
