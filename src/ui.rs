@@ -1139,27 +1139,44 @@ fn render_tools_view(frame: &mut Frame, app: &App, list_area: Rect, details_area
             .and_then(|input| input.values.get(field.key))
             .map(String::as_str)
             .unwrap_or("");
+        let is_focused = idx == app.tools.selected_field_index;
         let shown = if value.is_empty() {
             field.placeholder
         } else {
             value
         };
-        let marker = if idx == app.tools.selected_field_index {
+        let marker = if is_focused {
             ">"
         } else {
             " "
         };
-        let style = if idx == app.tools.selected_field_index && app.tools.editing_input {
+        let field_style = if is_focused {
             Style::default()
-                .fg(Color::Yellow)
+                .fg(Color::Black)
+                .bg(Color::Yellow)
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
+        let shown_style = if value.is_empty() && !is_focused {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            field_style
+        };
         input_lines.push(Line::from(vec![
-            Span::styled(format!("{marker} {}: ", field.label), style),
-            Span::styled(shown.to_string(), style),
+            Span::styled(format!("{marker} {}: ", field.label), field_style),
+            Span::styled(shown.to_string(), shown_style),
         ]));
+    }
+
+    if tools_input_has_missing_values(definition, selected_input) {
+        input_lines.push(Line::from(""));
+        input_lines.push(Line::from(Span::styled(
+            "Warning: fill in the highlighted inputs before running.",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )));
     }
 
     if definition.availability == crate::tools::ToolAvailability::Planned {
@@ -1300,27 +1317,44 @@ fn render_tools_input_modal(frame: &mut Frame, app: &App) {
             .and_then(|input| input.values.get(field.key))
             .map(String::as_str)
             .unwrap_or("");
+        let is_focused = idx == app.tools.selected_field_index;
         let shown = if value.is_empty() {
             field.placeholder
         } else {
             value
         };
-        let marker = if idx == app.tools.selected_field_index {
+        let marker = if is_focused {
             ">"
         } else {
             " "
         };
-        let style = if idx == app.tools.selected_field_index {
+        let field_style = if is_focused {
             Style::default()
-                .fg(Color::Yellow)
+                .fg(Color::Black)
+                .bg(Color::Yellow)
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
+        let shown_style = if value.is_empty() && !is_focused {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            field_style
+        };
         lines.push(Line::from(vec![
-            Span::styled(format!("{marker} {}: ", field.label), style),
-            Span::styled(shown.to_string(), style),
+            Span::styled(format!("{marker} {}: ", field.label), field_style),
+            Span::styled(shown.to_string(), shown_style),
         ]));
+    }
+
+    if tools_input_has_missing_values(definition, selected_input) {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Warning: fill in the highlighted inputs before running.",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )));
     }
 
     frame.render_widget(
@@ -1335,6 +1369,18 @@ fn render_tools_input_modal(frame: &mut Frame, app: &App) {
             .style(Style::default().fg(Color::LightYellow).bg(Color::Black)),
         inner[1],
     );
+}
+
+fn tools_input_has_missing_values(
+    definition: &crate::tools::ToolDefinition,
+    selected_input: Option<&crate::tools::ToolInput>,
+) -> bool {
+    definition.fields.iter().any(|field| {
+        selected_input
+            .and_then(|input| input.values.get(field.key))
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(true)
+    })
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
@@ -3575,6 +3621,8 @@ mod tests {
         app.set_view_mode(ViewMode::Tools);
         app.tools.open_input_modal();
 
+        assert_eq!(app.tools.selected_field_index, 0);
+
         let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &app)).unwrap();
@@ -3591,6 +3639,54 @@ mod tests {
         assert!(rendered.contains("Target"));
         assert!(rendered.contains("Enter run"));
         assert!(rendered.contains("Esc cancel"));
+
+        let buffer = terminal.backend().buffer();
+        let has_focus_highlight = (0..30).any(|y| {
+            (0..120).any(|x| {
+                let cell = buffer.get(x, y);
+                cell.bg == Color::Yellow && cell.fg == Color::Black
+            })
+        });
+
+        assert!(has_focus_highlight);
+    }
+
+    #[test]
+    fn draw_tools_input_modal_mutes_placeholders_and_shows_warning() {
+        let mut app = App::default();
+        app.set_view_mode(ViewMode::Tools);
+        app.tools.open_input_modal();
+
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let mut rendered = String::new();
+        for y in 0..30 {
+            for x in 0..120 {
+                rendered.push_str(buffer.get(x, y).symbol());
+            }
+        }
+
+        assert!(rendered.contains("Warning: fill in the highlighted inputs before running."));
+
+        let mut placeholder_style_checked = false;
+        for y in 0..30 {
+            let mut row = String::new();
+            for x in 0..120 {
+                row.push_str(buffer.get(x, y).symbol());
+            }
+
+            if let Some(x) = row.find("8.8.8.8") {
+                let cell = buffer.get(x as u16, y);
+                assert_eq!(cell.fg, Color::DarkGray);
+                placeholder_style_checked = true;
+                break;
+            }
+        }
+
+        assert!(placeholder_style_checked);
     }
 
     #[test]

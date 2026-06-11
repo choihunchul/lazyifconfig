@@ -222,6 +222,7 @@ impl ToolsState {
         if self.selected_tool_is_runnable() && !self.selected_definition().fields.is_empty() {
             self.input_modal_open = true;
             self.editing_input = true;
+            self.selected_field_index = 0;
         }
     }
 
