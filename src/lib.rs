@@ -3,6 +3,7 @@ pub mod collector;
 pub mod command;
 pub mod model;
 pub mod route_inspector;
+pub mod runtime;
 pub mod tools;
 pub mod ui;
 pub mod update;
