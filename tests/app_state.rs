@@ -422,16 +422,8 @@ fn test_event_timeline_functionality() {
 #[test]
 fn test_routes_navigation() {
     let mut app = App::default();
-    let r1 = lazyifconfig::model::RouteEntry {
-        destination: "default".to_string(),
-        gateway: "192.168.0.1".to_string(),
-        interface: "en0".to_string(),
-    };
-    let r2 = lazyifconfig::model::RouteEntry {
-        destination: "10.8.0.0/24".to_string(),
-        gateway: "10.8.0.1".to_string(),
-        interface: "utun4".to_string(),
-    };
+    let r1 = lazyifconfig::model::RouteEntry::new("default", "192.168.0.1", "en0");
+    let r2 = lazyifconfig::model::RouteEntry::new("10.8.0.0/24", "10.8.0.1", "utun4");
 
     app.replace_snapshot(NetworkSnapshot {
         interfaces: vec![],
@@ -515,5 +507,4 @@ fn test_raw_viewer_search_highlights() {
     assert!(line_content.is_char_boundary(m.end_byte));
     assert_eq!(&line_content[m.start_byte..m.end_byte], "테스트");
 }
-
 

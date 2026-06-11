@@ -97,11 +97,109 @@ pub struct ListeningPort {
     pub user: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RouteFamily {
+    Ipv4,
+    Ipv6,
+    #[default]
+    Unknown,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RouteEntry {
     pub destination: String,
     pub gateway: String,
     pub interface: String,
+    pub metric: Option<u32>,
+    pub protocol: Option<String>,
+    pub flags: Option<String>,
+    pub family: RouteFamily,
+}
+
+impl RouteEntry {
+    pub fn new(
+        destination: impl Into<String>,
+        gateway: impl Into<String>,
+        interface: impl Into<String>,
+    ) -> Self {
+        Self {
+            destination: destination.into(),
+            gateway: gateway.into(),
+            interface: interface.into(),
+            metric: None,
+            protocol: None,
+            flags: None,
+            family: RouteFamily::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RoutePathResult {
+    pub destination: String,
+    pub resolved_destination: Option<String>,
+    pub source_ip: Option<String>,
+    pub interface: Option<String>,
+    pub gateway: Option<String>,
+    pub is_vpn: bool,
+    pub raw_output: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteGraphNodeKind {
+    Host,
+    Interface,
+    Gateway,
+    VpnTunnel,
+    Internet,
+    Destination,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteGraphNode {
+    pub kind: RouteGraphNodeKind,
+    pub label: String,
+    pub detail: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RouteGraph {
+    pub nodes: Vec<RouteGraphNode>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteDiagnosticSeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteDiagnostic {
+    pub severity: RouteDiagnosticSeverity,
+    pub title: String,
+    pub description: String,
+    pub affected_route: Option<RouteEntry>,
+    pub recommendation: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RouteInspectorSection {
+    #[default]
+    Summary,
+    PathViewer,
+    RouteTable,
+    VpnRoutes,
+    Diagnostics,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RouteSortColumn {
+    #[default]
+    Destination,
+    Gateway,
+    Interface,
+    Metric,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -230,12 +328,26 @@ impl Ord for Subnet {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         use std::cmp::Ordering;
         match (self, other) {
-            (Subnet::Ipv4 { network: n1, prefix_len: p1 }, Subnet::Ipv4 { network: n2, prefix_len: p2 }) => {
-                n1.cmp(n2).then(p1.cmp(p2))
-            }
-            (Subnet::Ipv6 { network: n1, prefix_len: p1 }, Subnet::Ipv6 { network: n2, prefix_len: p2 }) => {
-                n1.cmp(n2).then(p1.cmp(p2))
-            }
+            (
+                Subnet::Ipv4 {
+                    network: n1,
+                    prefix_len: p1,
+                },
+                Subnet::Ipv4 {
+                    network: n2,
+                    prefix_len: p2,
+                },
+            ) => n1.cmp(n2).then(p1.cmp(p2)),
+            (
+                Subnet::Ipv6 {
+                    network: n1,
+                    prefix_len: p1,
+                },
+                Subnet::Ipv6 {
+                    network: n2,
+                    prefix_len: p2,
+                },
+            ) => n1.cmp(n2).then(p1.cmp(p2)),
             (Subnet::Unassigned, Subnet::Unassigned) => Ordering::Equal,
             (Subnet::Ipv4 { .. }, _) => Ordering::Less,
             (_, Subnet::Ipv4 { .. }) => Ordering::Greater,
@@ -256,6 +368,9 @@ pub enum CommandSourceId {
     Ifconfig,
     NetstatRoutes,
     DefaultRoute,
+    Ipv6Routes,
+    IpRules,
+    RoutePath,
     NetstatConnections,
     LsofPorts,
     PublicIp,
@@ -287,6 +402,9 @@ impl CommandSourceId {
                     "route -n get default"
                 }
             }
+            CommandSourceId::Ipv6Routes => "ip -6 route show",
+            CommandSourceId::IpRules => "ip rule",
+            CommandSourceId::RoutePath => "route path lookup",
             CommandSourceId::NetstatConnections => "netstat -an",
             CommandSourceId::LsofPorts => {
                 if cfg!(target_os = "linux") {
@@ -296,7 +414,9 @@ impl CommandSourceId {
                 }
             }
             CommandSourceId::PublicIp => "curl -s -m 5 https://ipinfo.io/json",
-            CommandSourceId::GitHubRelease => "curl -s -L https://api.github.com/repos/<owner>/<repo>/releases/latest",
+            CommandSourceId::GitHubRelease => {
+                "curl -s -L https://api.github.com/repos/<owner>/<repo>/releases/latest"
+            }
             CommandSourceId::Arp => "arp -a",
         }
     }

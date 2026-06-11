@@ -12,6 +12,13 @@ pub struct CommandSpec {
     pub args: &'static [&'static str],
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnedCommandSpec {
+    pub display: String,
+    pub program: String,
+    pub args: Vec<String>,
+}
+
 pub fn interface_command_spec() -> CommandSpec {
     interface_command_spec_for_os(std::env::consts::OS)
 }
@@ -26,6 +33,18 @@ pub fn default_route_command_spec() -> CommandSpec {
 
 pub fn listening_ports_command_spec() -> CommandSpec {
     listening_ports_command_spec_for_os(std::env::consts::OS)
+}
+
+pub fn route_path_command_spec(destination: &str) -> OwnedCommandSpec {
+    route_path_command_spec_for_os(std::env::consts::OS, destination)
+}
+
+pub fn ipv6_route_table_command_spec() -> Option<OwnedCommandSpec> {
+    ipv6_route_table_command_spec_for_os(std::env::consts::OS)
+}
+
+pub fn ip_rule_command_spec() -> Option<OwnedCommandSpec> {
+    ip_rule_command_spec_for_os(std::env::consts::OS)
 }
 
 pub fn interface_command_spec_for_os(os: &str) -> CommandSpec {
@@ -92,6 +111,42 @@ pub fn listening_ports_command_spec_for_os(os: &str) -> CommandSpec {
     }
 }
 
+pub fn route_path_command_spec_for_os(os: &str, destination: &str) -> OwnedCommandSpec {
+    if os == "linux" {
+        OwnedCommandSpec {
+            display: format!("ip route get {destination}"),
+            program: "ip".to_string(),
+            args: vec![
+                "route".to_string(),
+                "get".to_string(),
+                destination.to_string(),
+            ],
+        }
+    } else {
+        OwnedCommandSpec {
+            display: format!("route -n get {destination}"),
+            program: "route".to_string(),
+            args: vec!["-n".to_string(), "get".to_string(), destination.to_string()],
+        }
+    }
+}
+
+pub fn ipv6_route_table_command_spec_for_os(os: &str) -> Option<OwnedCommandSpec> {
+    (os == "linux").then(|| OwnedCommandSpec {
+        display: "ip -6 route show".to_string(),
+        program: "ip".to_string(),
+        args: vec!["-6".to_string(), "route".to_string(), "show".to_string()],
+    })
+}
+
+pub fn ip_rule_command_spec_for_os(os: &str) -> Option<OwnedCommandSpec> {
+    (os == "linux").then(|| OwnedCommandSpec {
+        display: "ip rule".to_string(),
+        program: "ip".to_string(),
+        args: vec!["rule".to_string()],
+    })
+}
+
 pub fn run_command_capture(program: &str, args: &[&str]) -> Result<CommandResult, String> {
     use std::process::Command;
 
@@ -105,6 +160,11 @@ pub fn run_command_capture(program: &str, args: &[&str]) -> Result<CommandResult
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
         exit_code: output.status.code(),
     })
+}
+
+pub fn run_owned_command_capture(command: &OwnedCommandSpec) -> Result<CommandResult, String> {
+    let args: Vec<&str> = command.args.iter().map(String::as_str).collect();
+    run_command_capture(command.program.as_str(), &args)
 }
 
 pub fn run_ifconfig(_show_all: bool) -> Result<String, String> {
@@ -246,7 +306,10 @@ mod tests {
 
         assert_eq!(command.display, "ip -details -statistics address show");
         assert_eq!(command.program, "ip");
-        assert_eq!(command.args, &["-details", "-statistics", "address", "show"]);
+        assert_eq!(
+            command.args,
+            &["-details", "-statistics", "address", "show"]
+        );
     }
 
     #[test]
@@ -300,6 +363,44 @@ mod tests {
         assert_eq!(command.display, "lsof -iTCP -sTCP:LISTEN -P -n");
         assert_eq!(command.program, "lsof");
         assert_eq!(command.args, &["-iTCP", "-sTCP:LISTEN", "-P", "-n"]);
+    }
+
+    #[test]
+    fn route_path_command_uses_ip_route_get_on_linux() {
+        let command = route_path_command_spec_for_os("linux", "8.8.8.8");
+
+        assert_eq!(command.display, "ip route get 8.8.8.8");
+        assert_eq!(command.program, "ip");
+        assert_eq!(command.args, vec!["route", "get", "8.8.8.8"]);
+    }
+
+    #[test]
+    fn route_path_command_uses_route_get_on_non_linux() {
+        let command = route_path_command_spec_for_os("macos", "8.8.8.8");
+
+        assert_eq!(command.display, "route -n get 8.8.8.8");
+        assert_eq!(command.program, "route");
+        assert_eq!(command.args, vec!["-n", "get", "8.8.8.8"]);
+    }
+
+    #[test]
+    fn linux_route_support_commands_are_available() {
+        let ipv6 = ipv6_route_table_command_spec_for_os("linux").unwrap();
+        let rules = ip_rule_command_spec_for_os("linux").unwrap();
+
+        assert_eq!(ipv6.display, "ip -6 route show");
+        assert_eq!(ipv6.program, "ip");
+        assert_eq!(ipv6.args, vec!["-6", "route", "show"]);
+
+        assert_eq!(rules.display, "ip rule");
+        assert_eq!(rules.program, "ip");
+        assert_eq!(rules.args, vec!["rule"]);
+    }
+
+    #[test]
+    fn non_linux_route_support_commands_are_not_required() {
+        assert_eq!(ipv6_route_table_command_spec_for_os("macos"), None);
+        assert_eq!(ip_rule_command_spec_for_os("macos"), None);
     }
 
     #[test]

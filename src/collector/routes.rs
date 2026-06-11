@@ -34,11 +34,7 @@ pub fn parse_routes(netstat_output: &str) -> Vec<RouteEntry> {
                     continue;
                 }
 
-                routes.push(RouteEntry {
-                    destination: destination.to_string(),
-                    gateway: gateway.to_string(),
-                    interface: interface.to_string(),
-                });
+                routes.push(RouteEntry::new(destination, gateway, interface));
             }
         }
     }
@@ -60,11 +56,7 @@ fn parse_linux_ip_routes(input: &str) -> Vec<RouteEntry> {
         };
         let gateway = value_after(&parts, "via").unwrap_or("link");
 
-        routes.push(RouteEntry {
-            destination: destination.to_string(),
-            gateway: gateway.to_string(),
-            interface: interface.to_string(),
-        });
+        routes.push(RouteEntry::new(destination, gateway, interface));
     }
 
     routes
