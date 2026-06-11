@@ -90,6 +90,20 @@ fn parses_linux_route_get_output() {
 }
 
 #[test]
+fn rejects_malformed_linux_route_get_output() {
+    assert!(parse_linux_route_path("x", "not a route").is_err());
+}
+
+#[test]
+fn does_not_parse_linux_route_get_output_as_table_route() {
+    let output = "8.8.8.8 via 172.17.0.1 dev eth0 src 172.17.0.2 uid 501\n    cache";
+
+    let routes = parse_routes(output);
+
+    assert!(routes.is_empty());
+}
+
+#[test]
 fn parses_macos_route_get_output() {
     let output = "\
    route to: 8.8.8.8
@@ -109,4 +123,9 @@ destination: default
     assert_eq!(result.gateway.as_deref(), Some("192.168.0.1"));
     assert_eq!(result.interface.as_deref(), Some("en0"));
     assert_eq!(result.raw_output, output);
+}
+
+#[test]
+fn rejects_malformed_macos_route_get_output() {
+    assert!(parse_macos_route_path("x", "not a route").is_err());
 }

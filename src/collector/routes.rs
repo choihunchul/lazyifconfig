@@ -1,6 +1,10 @@
 use crate::model::{RouteEntry, RouteFamily, RoutePathResult};
 
 pub fn parse_routes(netstat_output: &str) -> Vec<RouteEntry> {
+    if looks_like_linux_route_get_output(netstat_output) {
+        return Vec::new();
+    }
+
     if netstat_output.lines().any(is_linux_ip_route_line) {
         return parse_linux_ip_routes(netstat_output);
     }
@@ -81,6 +85,9 @@ pub fn parse_linux_route_path(
     let resolved_destination = parts.first().map(|value| (*value).to_string());
     let gateway = value_after(&parts, "via").map(str::to_string);
     let interface = value_after(&parts, "dev").map(str::to_string);
+    if resolved_destination.is_none() || interface.is_none() {
+        return Err("route path output is missing required fields".to_string());
+    }
     let source_ip = value_after(&parts, "src").map(str::to_string);
     Ok(RoutePathResult {
         destination: destination.to_string(),
@@ -110,6 +117,9 @@ pub fn parse_macos_route_path(destination: &str, output: &str) -> Result<RoutePa
             interface = Some(value.trim().to_string());
         }
     }
+    if resolved_destination.is_none() || interface.is_none() {
+        return Err("route path output is missing required fields".to_string());
+    }
     Ok(RoutePathResult {
         destination: destination.to_string(),
         resolved_destination,
@@ -124,6 +134,13 @@ pub fn parse_macos_route_path(destination: &str, output: &str) -> Result<RoutePa
 fn is_linux_ip_route_line(line: &str) -> bool {
     let parts: Vec<&str> = line.split_whitespace().collect();
     value_after(&parts, "dev").is_some()
+}
+
+fn looks_like_linux_route_get_output(input: &str) -> bool {
+    input.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed == "cache" || trimmed.split_whitespace().any(|part| part == "uid")
+    })
 }
 
 fn infer_linux_route_family(destination: &str, gateway: &str) -> RouteFamily {
