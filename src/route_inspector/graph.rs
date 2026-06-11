@@ -106,18 +106,20 @@ pub fn render_route_graph_lines(graph: &RouteGraph) -> Vec<String> {
 }
 
 fn render_node(node: &RouteGraphNode) -> Vec<String> {
-    let mut content = truncate(&node.label, 32);
-    if let Some(detail) = node.detail.as_deref().filter(|detail| !detail.is_empty()) {
-        content.push_str(" · ");
-        content.push_str(&truncate(detail, 32));
-    }
-    let width = content.chars().count() + 2;
+    const CONTENT_WIDTH: usize = 32;
 
-    vec![
-        format!("┌{}┐", "─".repeat(width)),
-        format!("│ {content} │"),
-        format!("└{}┘", "─".repeat(width)),
-    ]
+    let mut content_lines = vec![truncate(&node.label, CONTENT_WIDTH)];
+    if let Some(detail) = node.detail.as_deref().filter(|detail| !detail.is_empty()) {
+        content_lines.push(truncate(detail, CONTENT_WIDTH));
+    }
+
+    let mut lines = vec![format!("┌{}┐", "─".repeat(CONTENT_WIDTH + 2))];
+    lines.extend(content_lines.into_iter().map(|content| {
+        let padding = CONTENT_WIDTH.saturating_sub(content.chars().count());
+        format!("│ {content}{} │", " ".repeat(padding))
+    }));
+    lines.push(format!("└{}┘", "─".repeat(CONTENT_WIDTH + 2)));
+    lines
 }
 
 fn should_show_gateway(gateway: &str) -> bool {

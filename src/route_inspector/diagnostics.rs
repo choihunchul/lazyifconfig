@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::model::{
     InterfaceStatus, NetworkInterface, RouteDiagnostic, RouteDiagnosticSeverity, RouteEntry,
+    RouteFamily,
 };
 
 use super::vpn::is_vpn_interface_name;
@@ -15,6 +16,11 @@ pub fn build_route_diagnostics(
         .iter()
         .filter(|route| is_default_route(route))
         .collect();
+    let ipv4_default_routes: Vec<&RouteEntry> = default_routes
+        .iter()
+        .copied()
+        .filter(|route| route.family == RouteFamily::Ipv4)
+        .collect();
 
     if default_routes.is_empty() {
         diagnostics.push(diagnostic(
@@ -26,12 +32,12 @@ pub fn build_route_diagnostics(
         ));
     }
 
-    if default_routes.len() > 1 {
+    if ipv4_default_routes.len() > 1 {
         diagnostics.push(diagnostic(
             RouteDiagnosticSeverity::Warning,
             "Multiple default routes",
             "More than one default route is present.",
-            default_routes.first().map(|route| (*route).clone()),
+            ipv4_default_routes.first().map(|route| (*route).clone()),
             "Review route metrics and remove unintended default routes.",
         ));
     }
@@ -53,10 +59,13 @@ pub fn build_route_diagnostics(
         .map(|interface| (interface.name.as_str(), interface))
         .collect();
     let mut reported_missing = HashSet::new();
+    let mut reported_down = HashSet::new();
 
     for route in routes {
         if let Some(interface) = interface_by_name.get(route.interface.as_str()) {
-            if interface.status == InterfaceStatus::Down {
+            if interface.status == InterfaceStatus::Down
+                && reported_down.insert(route.interface.clone())
+            {
                 diagnostics.push(diagnostic(
                     RouteDiagnosticSeverity::Warning,
                     "Route interface is down",
@@ -76,13 +85,17 @@ pub fn build_route_diagnostics(
         }
     }
 
-    let mut metric_keys: HashSet<(&str, u32)> = HashSet::new();
-    let mut reported_metric_conflicts: HashSet<(&str, u32)> = HashSet::new();
+    let mut metric_keys: HashSet<(&str, &'static str, u32)> = HashSet::new();
+    let mut reported_metric_conflicts: HashSet<(&str, &'static str, u32)> = HashSet::new();
     for route in routes {
         let Some(metric) = route.metric else {
             continue;
         };
-        let key = (route.destination.as_str(), metric);
+        let key = (
+            route.destination.as_str(),
+            route_family_key(route.family),
+            metric,
+        );
         if !metric_keys.insert(key) && reported_metric_conflicts.insert(key) {
             diagnostics.push(diagnostic(
                 RouteDiagnosticSeverity::Warning,
@@ -102,6 +115,14 @@ pub fn is_default_route(route: &RouteEntry) -> bool {
         route.destination.trim().to_ascii_lowercase().as_str(),
         "default" | "0.0.0.0/0"
     )
+}
+
+fn route_family_key(family: RouteFamily) -> &'static str {
+    match family {
+        RouteFamily::Ipv4 => "ipv4",
+        RouteFamily::Ipv6 => "ipv6",
+        RouteFamily::Unknown => "unknown",
+    }
 }
 
 fn diagnostic(

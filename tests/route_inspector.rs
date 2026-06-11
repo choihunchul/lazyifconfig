@@ -164,6 +164,19 @@ fn diagnostics_find_missing_and_multiple_default_routes() {
 }
 
 #[test]
+fn diagnostics_do_not_flag_dual_stack_defaults_as_multiple_defaults() {
+    let routes = vec![
+        route("default", "192.168.0.1", "en0", None),
+        route_with_family("default", "fe80::1", "en0", None, RouteFamily::Ipv6),
+    ];
+    let diagnostics = build_route_diagnostics(&routes, &[]);
+
+    assert!(!diagnostics
+        .iter()
+        .any(|item| item.title == "Multiple default routes"));
+}
+
+#[test]
 fn diagnostics_find_down_and_missing_interfaces() {
     let routes = vec![
         route("default", "192.168.0.1", "en0", None),
@@ -182,6 +195,23 @@ fn diagnostics_find_down_and_missing_interfaces() {
 }
 
 #[test]
+fn diagnostics_report_down_interface_once_per_interface() {
+    let routes = vec![
+        route("default", "192.168.0.1", "en0", None),
+        route("10.0.0.0/24", "192.168.0.1", "en0", None),
+    ];
+    let interfaces = vec![interface("en0", InterfaceStatus::Down)];
+
+    let diagnostics = build_route_diagnostics(&routes, &interfaces);
+    let down_count = diagnostics
+        .iter()
+        .filter(|item| item.title == "Route interface is down")
+        .count();
+
+    assert_eq!(down_count, 1);
+}
+
+#[test]
 fn diagnostics_report_missing_interface_with_empty_interface_snapshot() {
     let routes = vec![route("default", "192.168.0.1", "en0", None)];
     let diagnostics = build_route_diagnostics(&routes, &[]);
@@ -189,6 +219,19 @@ fn diagnostics_report_missing_interface_with_empty_interface_snapshot() {
     assert!(diagnostics
         .iter()
         .any(|item| item.title == "Route references missing interface"));
+}
+
+#[test]
+fn diagnostics_do_not_flag_metric_conflict_across_route_families() {
+    let routes = vec![
+        route("default", "192.168.0.1", "en0", Some(100)),
+        route_with_family("default", "fe80::1", "en0", Some(100), RouteFamily::Ipv6),
+    ];
+    let diagnostics = build_route_diagnostics(&routes, &[]);
+
+    assert!(!diagnostics
+        .iter()
+        .any(|item| item.title == "Route metric conflict"));
 }
 
 #[test]
@@ -231,7 +274,39 @@ fn graph_renders_plain_and_vpn_paths() {
     assert!(lines.iter().any(|line| line.contains("utun4")));
 }
 
+#[test]
+fn graph_renderer_caps_line_width_for_long_values() {
+    let result = RoutePathResult {
+        destination: "this-is-a-very-long-destination-name.example.invalid".to_string(),
+        resolved_destination: Some(
+            "this-is-a-very-long-destination-name.example.invalid".to_string(),
+        ),
+        source_ip: Some("192.168.0.25".to_string()),
+        interface: Some("verylonginterfacename-for-route-inspector-tests0".to_string()),
+        gateway: Some(
+            "very-long-gateway-name-for-route-inspector-tests.example.invalid".to_string(),
+        ),
+        is_vpn: false,
+        raw_output: String::new(),
+    };
+
+    let graph = build_route_graph(&result);
+    let lines = render_route_graph_lines(&graph);
+
+    assert!(lines.iter().all(|line| line.chars().count() <= 40));
+}
+
 fn route(destination: &str, gateway: &str, interface: &str, metric: Option<u32>) -> RouteEntry {
+    route_with_family(destination, gateway, interface, metric, RouteFamily::Ipv4)
+}
+
+fn route_with_family(
+    destination: &str,
+    gateway: &str,
+    interface: &str,
+    metric: Option<u32>,
+    family: RouteFamily,
+) -> RouteEntry {
     RouteEntry {
         destination: destination.to_string(),
         gateway: gateway.to_string(),
@@ -239,7 +314,7 @@ fn route(destination: &str, gateway: &str, interface: &str, metric: Option<u32>)
         metric,
         protocol: None,
         flags: None,
-        family: RouteFamily::Ipv4,
+        family,
     }
 }
 
