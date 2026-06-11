@@ -7,7 +7,9 @@ use lazyifconfig::app::{App, NavigationItem, ViewMode};
 use lazyifconfig::collector::connections::parse_connections;
 use lazyifconfig::collector::interface::{merge_gateways, parse_interfaces};
 use lazyifconfig::collector::ports::parse_listening_ports;
-use lazyifconfig::collector::routes::parse_routes;
+use lazyifconfig::collector::routes::{
+    parse_linux_route_path, parse_macos_route_path, parse_routes,
+};
 use lazyifconfig::collector::stats::merge_stats;
 use lazyifconfig::collector::system::collect_process_metrics;
 use lazyifconfig::command::{
@@ -16,7 +18,7 @@ use lazyifconfig::command::{
 };
 use lazyifconfig::model::{
     CommandOutput, CommandSourceId, EventSeverity, NetworkEvent, NetworkEventKind, NetworkSnapshot,
-    PublicIpInfo,
+    PublicIpInfo, RouteInspectorSection,
 };
 use lazyifconfig::update::{self, CheckOutcome, UpdateMessage, UpdateStatus};
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -63,7 +65,7 @@ pub fn tick_update(app: &mut App) -> Result<(), String> {
         merge_gateways(&mut parsed, out);
     }
 
-    let routes = if let Some(out) = &netstat_out {
+    let mut routes = if let Some(out) = &netstat_out {
         parse_routes(out)
     } else {
         Vec::new()
@@ -77,6 +79,16 @@ pub fn tick_update(app: &mut App) -> Result<(), String> {
         default_route_command.program,
         default_route_command.args,
     );
+
+    if let Some(command) = lazyifconfig::command::ipv6_route_table_command_spec() {
+        let ipv6_route_out =
+            capture_owned_command_output(app, CommandSourceId::Ipv6Routes, &command).ok();
+        routes = merge_additional_route_output(routes, ipv6_route_out.as_deref());
+    }
+
+    if let Some(command) = lazyifconfig::command::ip_rule_command_spec() {
+        let _ = capture_owned_command_output(app, CommandSourceId::IpRules, &command);
+    }
 
     let stats_out = run_netstat_ib().unwrap_or_else(|_| raw_out.clone());
     let merged = merge_stats(&stats_out, parsed);
@@ -255,6 +267,27 @@ fn capture_command_output(
     result
 }
 
+fn capture_owned_command_output(
+    app: &mut App,
+    source_id: CommandSourceId,
+    command: &lazyifconfig::command::OwnedCommandSpec,
+) -> Result<String, String> {
+    let args: Vec<&str> = command.args.iter().map(String::as_str).collect();
+    let captured = run_command_capture(command.program.as_str(), &args)?;
+    let result = command_stdout(&captured);
+    app.command_outputs.insert(
+        source_id,
+        CommandOutput {
+            command: command.display.clone(),
+            stdout: captured.stdout,
+            stderr: captured.stderr,
+            executed_at: std::time::SystemTime::now(),
+            exit_code: captured.exit_code,
+        },
+    );
+    result
+}
+
 fn command_stdout(output: &lazyifconfig::command::CommandResult) -> Result<String, String> {
     if output.exit_code == Some(0) {
         Ok(output.stdout.clone())
@@ -263,6 +296,93 @@ fn command_stdout(output: &lazyifconfig::command::CommandResult) -> Result<Strin
     } else {
         Err(output.stderr.clone())
     }
+}
+
+fn merge_additional_route_output(
+    mut routes: Vec<lazyifconfig::model::RouteEntry>,
+    additional_output: Option<&str>,
+) -> Vec<lazyifconfig::model::RouteEntry> {
+    if let Some(output) = additional_output {
+        routes.extend(parse_routes(output));
+    }
+    routes
+}
+
+fn run_route_path_lookup(app: &mut App) {
+    let destination = app.route_inspector.destination_input.trim().to_string();
+    if destination.is_empty() {
+        app.route_inspector.latest_path_result = None;
+        app.route_inspector.latest_path_error = Some("Enter a destination first.".to_string());
+        return;
+    }
+
+    let command = lazyifconfig::command::route_path_command_spec(&destination);
+    match capture_owned_command_output(app, CommandSourceId::RoutePath, &command) {
+        Ok(output) => {
+            let parsed = if cfg!(target_os = "linux") {
+                parse_linux_route_path(&destination, &output)
+            } else {
+                parse_macos_route_path(&destination, &output)
+            };
+
+            match parsed {
+                Ok(mut result) => {
+                    result.is_vpn = result
+                        .interface
+                        .as_deref()
+                        .map(lazyifconfig::route_inspector::vpn::is_vpn_interface_name)
+                        .unwrap_or(false);
+                    app.route_inspector.latest_path_result = Some(result);
+                    app.route_inspector.latest_path_error = None;
+                }
+                Err(error) => {
+                    app.route_inspector.latest_path_result = None;
+                    app.route_inspector.latest_path_error = Some(error);
+                }
+            }
+        }
+        Err(error) => {
+            app.route_inspector.latest_path_result = None;
+            app.route_inspector.latest_path_error = Some(route_path_command_error_message(&error));
+        }
+    }
+}
+
+fn route_path_command_error_message(error: &str) -> String {
+    format!("destination could not be resolved by route command: {error}")
+}
+
+fn routes_raw_sources(app: &App) -> Vec<CommandSourceId> {
+    let mut sources = vec![
+        CommandSourceId::NetstatRoutes,
+        CommandSourceId::DefaultRoute,
+    ];
+    if app
+        .command_outputs
+        .contains_key(&CommandSourceId::Ipv6Routes)
+    {
+        sources.push(CommandSourceId::Ipv6Routes);
+    }
+    if app.command_outputs.contains_key(&CommandSourceId::IpRules) {
+        sources.push(CommandSourceId::IpRules);
+    }
+    if app
+        .command_outputs
+        .contains_key(&CommandSourceId::RoutePath)
+    {
+        sources.push(CommandSourceId::RoutePath);
+    }
+    if app.command_outputs.contains_key(&CommandSourceId::PublicIp) {
+        sources.push(CommandSourceId::PublicIp);
+    }
+    sources
+}
+
+fn raw_viewer_command_to_copy(app: &App, src_id: CommandSourceId) -> String {
+    app.command_outputs
+        .get(&src_id)
+        .map(|out| out.command.clone())
+        .unwrap_or_else(|| src_id.as_str().to_string())
 }
 
 fn maybe_start_auto_update_check(app: &mut App) {
@@ -645,12 +765,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if let Some(&src_id) =
                                     app.raw_viewer.sources.get(app.raw_viewer.selected_index)
                                 {
-                                    let _ =
-                                        lazyifconfig::command::copy_to_clipboard(src_id.as_str());
+                                    let command = raw_viewer_command_to_copy(&app, src_id);
+                                    let _ = lazyifconfig::command::copy_to_clipboard(&command);
                                     app.recent_events.push(NetworkEvent::new(
                                         NetworkEventKind::ActionCopied,
                                         EventSeverity::Info,
-                                        format!("Copied command: {}", src_id.as_str()),
+                                        format!("Copied command: {command}"),
                                     ));
                                 }
                             }
@@ -701,6 +821,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::End => {
                             app.release_notes_viewer.scroll = u16::MAX;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                if app.route_inspector.destination_input_active {
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.route_inspector.destination_input_active = false;
+                        }
+                        KeyCode::Enter => {
+                            app.route_inspector.destination_input_active = false;
+                            run_route_path_lookup(&mut app);
+                        }
+                        KeyCode::Backspace => {
+                            app.route_inspector.destination_input.pop();
+                        }
+                        KeyCode::Char(c) => {
+                            app.route_inspector.destination_input.push(c);
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                if app.route_inspector.route_filter_active {
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.route_inspector.route_filter.clear();
+                            app.route_inspector.route_filter_active = false;
+                            app.update_navigation_items();
+                        }
+                        KeyCode::Enter => {
+                            app.route_inspector.route_filter_active = false;
+                        }
+                        KeyCode::Backspace => {
+                            app.route_inspector.route_filter.pop();
+                            app.update_navigation_items();
+                            app.selected_index = 0;
+                        }
+                        KeyCode::Char(c) => {
+                            app.route_inspector.route_filter.push(c);
+                            app.update_navigation_items();
+                            app.selected_index = 0;
                         }
                         _ => {}
                     }
@@ -875,11 +1040,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             ViewMode::Connections => vec![CommandSourceId::NetstatConnections],
                             ViewMode::Ports => vec![CommandSourceId::LsofPorts],
-                            ViewMode::Routes => vec![
-                                CommandSourceId::NetstatRoutes,
-                                CommandSourceId::DefaultRoute,
-                                CommandSourceId::PublicIp,
-                            ],
+                            ViewMode::Routes => routes_raw_sources(&app),
                             ViewMode::Timeline => vec![
                                 CommandSourceId::Ifconfig,
                                 CommandSourceId::NetstatRoutes,
@@ -932,6 +1093,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         app.help_visible = false;
                         app.select_previous_view_mode();
                     }
+                    KeyCode::Tab => {
+                        if app.view_mode == ViewMode::Routes {
+                            app.select_next_route_section();
+                        }
+                    }
+                    KeyCode::BackTab => {
+                        if app.view_mode == ViewMode::Routes {
+                            app.select_previous_route_section();
+                        }
+                    }
+                    KeyCode::Enter => {
+                        if app.view_mode == ViewMode::Routes {
+                            app.route_inspector.destination_input_active = true;
+                            app.route_inspector.active_section = RouteInspectorSection::PathViewer;
+                        }
+                    }
                     KeyCode::Char('K') => {
                         app.help_visible = false;
                         if app.view_mode == ViewMode::Ports {
@@ -976,10 +1153,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     KeyCode::Char('/') => {
                         app.help_visible = false;
-                        if app.view_mode == ViewMode::Ports {
-                            app.port_filter_active = true;
-                        } else if app.view_mode == ViewMode::Connections {
-                            app.connection_filter_active = true;
+                        match app.view_mode {
+                            ViewMode::Ports => app.port_filter_active = true,
+                            ViewMode::Connections => app.connection_filter_active = true,
+                            ViewMode::Routes => app.route_inspector.route_filter_active = true,
+                            _ => {}
                         }
                     }
                     KeyCode::Char('s') | KeyCode::Char('ㄴ') => {
@@ -1160,6 +1338,106 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn route_path_lookup_requires_destination() {
+        let mut app = App::default();
+        app.route_inspector.destination_input = "   ".to_string();
+        app.route_inspector.latest_path_result = Some(lazyifconfig::model::RoutePathResult {
+            destination: "8.8.8.8".to_string(),
+            ..Default::default()
+        });
+
+        run_route_path_lookup(&mut app);
+
+        assert!(app.route_inspector.latest_path_result.is_none());
+        assert_eq!(
+            app.route_inspector.latest_path_error.as_deref(),
+            Some("Enter a destination first.")
+        );
+    }
+
+    #[test]
+    fn route_path_command_error_message_uses_literal_destination_label() {
+        assert_eq!(
+            route_path_command_error_message("lookup failed"),
+            "destination could not be resolved by route command: lookup failed"
+        );
+    }
+
+    #[test]
+    fn routes_raw_sources_include_available_optional_outputs_in_order() {
+        let mut app = App::default();
+        app.command_outputs.insert(
+            CommandSourceId::RoutePath,
+            CommandOutput {
+                command: "ip route get 8.8.8.8".to_string(),
+                stdout: String::new(),
+                stderr: String::new(),
+                executed_at: SystemTime::now(),
+                exit_code: Some(0),
+            },
+        );
+        app.command_outputs.insert(
+            CommandSourceId::Ipv6Routes,
+            CommandOutput {
+                command: "ip -6 route show".to_string(),
+                stdout: String::new(),
+                stderr: String::new(),
+                executed_at: SystemTime::now(),
+                exit_code: Some(0),
+            },
+        );
+
+        assert_eq!(
+            routes_raw_sources(&app),
+            vec![
+                CommandSourceId::NetstatRoutes,
+                CommandSourceId::DefaultRoute,
+                CommandSourceId::Ipv6Routes,
+                CommandSourceId::RoutePath,
+            ]
+        );
+    }
+
+    #[test]
+    fn raw_viewer_command_to_copy_prefers_captured_command_and_falls_back_to_source_label() {
+        let mut app = App::default();
+        app.command_outputs.insert(
+            CommandSourceId::RoutePath,
+            CommandOutput {
+                command: "ip route get 8.8.8.8".to_string(),
+                stdout: String::new(),
+                stderr: String::new(),
+                executed_at: SystemTime::now(),
+                exit_code: Some(0),
+            },
+        );
+
+        assert_eq!(
+            raw_viewer_command_to_copy(&app, CommandSourceId::RoutePath),
+            "ip route get 8.8.8.8"
+        );
+        assert_eq!(
+            raw_viewer_command_to_copy(&app, CommandSourceId::Ifconfig),
+            CommandSourceId::Ifconfig.as_str()
+        );
+    }
+
+    #[test]
+    fn additional_linux_ipv6_route_output_is_merged_into_snapshot_routes() {
+        let routes = parse_routes("default via 172.17.0.1 dev eth0 proto static metric 100");
+
+        let merged = merge_additional_route_output(
+            routes,
+            Some("default via fe80::1 dev eth0 proto ra metric 100\n2001:db8::/64 dev eth0 proto kernel metric 256"),
+        );
+
+        assert!(merged
+            .iter()
+            .any(|route| route.family == lazyifconfig::model::RouteFamily::Ipv6));
+        assert_eq!(merged.len(), 3);
+    }
 
     #[tokio::test]
     async fn test_tick_update() {

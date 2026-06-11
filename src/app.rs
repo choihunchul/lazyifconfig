@@ -3,7 +3,8 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::model::{
     CommandOutput, CommandSourceId, NetworkEvent, NetworkInterface, NetworkSnapshot,
-    ProcessMetrics, PublicIpInfo, Subnet,
+    ProcessMetrics, PublicIpInfo, RouteDiagnostic, RouteEntry, RouteInspectorSection,
+    RoutePathResult, RouteSortColumn, Subnet,
 };
 use crate::tools::{
     ToolAvailability, ToolExecutionState, ToolId, ToolInput, ToolRegistry, ToolResult,
@@ -269,6 +270,7 @@ pub struct App {
     pub tools: ToolsState,
     pub pending_tool_results:
         std::sync::Arc<std::sync::Mutex<Vec<(ToolId, Result<ToolResult, String>)>>>,
+    pub route_inspector: RouteInspectorState,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -288,6 +290,35 @@ pub struct RawViewerState {
     pub search_active: bool,
     pub search_matches: Vec<SearchMatch>,
     pub current_match_index: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct RouteInspectorState {
+    pub active_section: RouteInspectorSection,
+    pub destination_input: String,
+    pub destination_input_active: bool,
+    pub latest_path_result: Option<RoutePathResult>,
+    pub latest_path_error: Option<String>,
+    pub diagnostics: Vec<RouteDiagnostic>,
+    pub route_filter: String,
+    pub route_filter_active: bool,
+    pub sort_column: RouteSortColumn,
+}
+
+impl Default for RouteInspectorState {
+    fn default() -> Self {
+        Self {
+            active_section: RouteInspectorSection::Summary,
+            destination_input: "8.8.8.8".to_string(),
+            destination_input_active: false,
+            latest_path_result: None,
+            latest_path_error: None,
+            diagnostics: Vec::new(),
+            route_filter: String::new(),
+            route_filter_active: false,
+            sort_column: RouteSortColumn::Destination,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -333,12 +364,18 @@ impl Default for App {
             process_metrics: None,
             tools: ToolsState::default(),
             pending_tool_results: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            route_inspector: RouteInspectorState::default(),
         }
     }
 }
 
 impl App {
     pub fn replace_snapshot(&mut self, mut snapshot: NetworkSnapshot) {
+        let route_diagnostics = crate::route_inspector::diagnostics::build_route_diagnostics(
+            &snapshot.routes,
+            &snapshot.interfaces,
+        );
+
         if !self.show_all {
             snapshot
                 .interfaces
@@ -394,6 +431,7 @@ impl App {
         }
 
         self.push_generated_events();
+        self.route_inspector.diagnostics = route_diagnostics;
         self.update_navigation_items();
         self.restore_selection(selected_name.as_deref());
     }
@@ -434,6 +472,8 @@ impl App {
         self.port_filter_active = false;
         self.connection_filter.clear();
         self.connection_filter_active = false;
+        self.route_inspector.route_filter.clear();
+        self.route_inspector.route_filter_active = false;
         self.update_navigation_items();
         self.restore_selection(selected_name.as_deref());
     }
@@ -603,6 +643,73 @@ impl App {
                 .saturating_sub(previous_stats.tx_bytes)
                 / elapsed,
         ))
+    }
+
+    pub fn refresh_route_diagnostics(&mut self) {
+        let Some(snapshot) = &self.current_snapshot else {
+            self.route_inspector.diagnostics.clear();
+            return;
+        };
+
+        self.route_inspector.diagnostics =
+            crate::route_inspector::diagnostics::build_route_diagnostics(
+                &snapshot.routes,
+                &snapshot.interfaces,
+            );
+    }
+
+    pub fn filtered_sorted_routes(&self) -> Vec<(usize, &RouteEntry)> {
+        let Some(snapshot) = &self.current_snapshot else {
+            return Vec::new();
+        };
+
+        let query = self.route_inspector.route_filter.to_lowercase();
+        let mut routes: Vec<(usize, &RouteEntry)> = snapshot
+            .routes
+            .iter()
+            .enumerate()
+            .filter(|(_, route)| {
+                query.is_empty()
+                    || route.destination.to_lowercase().contains(&query)
+                    || route.gateway.to_lowercase().contains(&query)
+                    || route.interface.to_lowercase().contains(&query)
+            })
+            .collect();
+
+        match self.route_inspector.sort_column {
+            RouteSortColumn::Destination => {
+                routes.sort_by(|(_, a), (_, b)| a.destination.cmp(&b.destination))
+            }
+            RouteSortColumn::Gateway => routes.sort_by(|(_, a), (_, b)| a.gateway.cmp(&b.gateway)),
+            RouteSortColumn::Interface => {
+                routes.sort_by(|(_, a), (_, b)| a.interface.cmp(&b.interface))
+            }
+            RouteSortColumn::Metric => routes.sort_by_key(|(_, route)| route.metric),
+        }
+
+        routes
+    }
+
+    pub fn select_next_route_section(&mut self) {
+        self.route_inspector.active_section = match self.route_inspector.active_section {
+            RouteInspectorSection::Summary => RouteInspectorSection::PathViewer,
+            RouteInspectorSection::PathViewer => RouteInspectorSection::RouteTable,
+            RouteInspectorSection::RouteTable => RouteInspectorSection::VpnRoutes,
+            RouteInspectorSection::VpnRoutes => RouteInspectorSection::Diagnostics,
+            RouteInspectorSection::Diagnostics => RouteInspectorSection::Summary,
+        };
+        self.details_scroll = 0;
+    }
+
+    pub fn select_previous_route_section(&mut self) {
+        self.route_inspector.active_section = match self.route_inspector.active_section {
+            RouteInspectorSection::Summary => RouteInspectorSection::Diagnostics,
+            RouteInspectorSection::PathViewer => RouteInspectorSection::Summary,
+            RouteInspectorSection::RouteTable => RouteInspectorSection::PathViewer,
+            RouteInspectorSection::VpnRoutes => RouteInspectorSection::RouteTable,
+            RouteInspectorSection::Diagnostics => RouteInspectorSection::VpnRoutes,
+        };
+        self.details_scroll = 0;
     }
 
     pub fn update_navigation_items(&mut self) {
@@ -784,11 +891,9 @@ impl App {
                     .collect();
             }
             ViewMode::Routes => {
-                let snapshot = snapshot.unwrap();
-                self.navigation_items = snapshot
-                    .routes
-                    .iter()
-                    .enumerate()
+                self.navigation_items = self
+                    .filtered_sorted_routes()
+                    .into_iter()
                     .map(|(idx, r)| NavigationItem::Route {
                         destination: r.destination.clone(),
                         gateway: r.gateway.clone(),
