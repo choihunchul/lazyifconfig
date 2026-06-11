@@ -188,7 +188,7 @@ fn get_status_text(app: &App) -> String {
             }
         }
         ViewMode::Timeline => {
-            " q | u check | U update | R notes | [/] | i/n/c/p/g | j/k ".to_string()
+            " q | u check | U update | R notes | S save | [/] | i/n/c/p/g | j/k ".to_string()
         }
         ViewMode::Routes => {
             if app.route_inspector.route_filter_active {
@@ -1028,6 +1028,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     crate::model::NetworkEventKind::UpdateAvailable => "A newer GitHub release was found and is ready to install.",
                     crate::model::NetworkEventKind::UpdateInstalled => "A new binary has been installed. Restart the app to run the updated version.",
                     crate::model::NetworkEventKind::UpdateCheckFailed => "The GitHub release check or install step failed.",
+                    crate::model::NetworkEventKind::TimelineExported => "Timeline was saved to disk for offline review.",
                 };
                     lines.push(Line::from(""));
                     lines.push(Line::from(Span::styled(
@@ -1612,7 +1613,7 @@ fn draw_help(frame: &mut Frame) {
         Line::from("p ports      e timeline g routes"),
         Line::from("u check updates   U apply update"),
         Line::from("R release notes    Esc close popup"),
-        Line::from("o raw output ? help     s sort S dir"),
+        Line::from("o raw output ? help     s sort S save"),
         Line::from("j/k up/down  h/l tabs   [/]: details scroll"),
     ];
     let help = Paragraph::new(lines)

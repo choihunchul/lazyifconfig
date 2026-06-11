@@ -266,6 +266,7 @@ pub enum NetworkEventKind {
     UpdateAvailable,
     UpdateInstalled,
     UpdateCheckFailed,
+    TimelineExported,
 }
 
 impl NetworkEventKind {
@@ -294,6 +295,7 @@ impl NetworkEventKind {
             NetworkEventKind::UpdateAvailable => "Update Available",
             NetworkEventKind::UpdateInstalled => "Update Installed",
             NetworkEventKind::UpdateCheckFailed => "Update Check Failed",
+            NetworkEventKind::TimelineExported => "Timeline Exported",
         }
     }
 }

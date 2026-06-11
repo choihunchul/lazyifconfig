@@ -87,6 +87,7 @@ cargo run --release
 - `c`: connections view
 - `p`: ports view
 - `e`: timeline view
+- `S`: save timeline to a timestamped file in current directory (e.g. `lazyifconfig-timeline-YYYYMMDD-HHMMSS.txt`)
 - `g`: Route Inspector
 - `/` and `[` : scroll in list-heavy views
 - In Route Inspector: `Enter` starts destination path lookup, `Tab` switches inspector sections, `/` filters routes, `o` opens raw route output
@@ -144,3 +145,7 @@ The release workflow builds and uploads artifacts for:
 
 - Linux interface and route views use `ip`, and the port view uses `ss`; the connection view still relies on `netstat`.
 - Public IP information is fetched from `https://ipinfo.io/json`.
+
+## Project Rules
+
+- [Project Rules](PROJECT_RULES.md): release workflows and checkpoint commit policy for development.
