@@ -61,6 +61,8 @@ jobs:
       source-repo: ${{ github.repository }}
       tap-repo: choihunchul/homebrew-tap
       formula-name: lazyifconfig
+      desc: Terminal UI for inspecting local network state
+      homepage: https://github.com/choihunchol/lazyifconfig
       tag: ${{ needs.resolve-release.outputs.tag }}
       verify-tag: false
     secrets:
