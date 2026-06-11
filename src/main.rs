@@ -1170,7 +1170,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     KeyCode::Char('S') => {
                         app.help_visible = false;
-                        if app.view_mode == ViewMode::Ports {
+                        if app.view_mode == ViewMode::Timeline {
+                            match lazyifconfig::command::save_timeline_events_to_file(
+                                &app.recent_events,
+                            ) {
+                                Ok(path) => {
+                                    app.push_event(NetworkEvent::new(
+                                        NetworkEventKind::TimelineExported,
+                                        EventSeverity::Info,
+                                        format!("Saved timeline to {}", path.display().to_string()),
+                                    ));
+                                }
+                                Err(error) => {
+                                    app.push_event(NetworkEvent::new(
+                                        NetworkEventKind::SystemError,
+                                        EventSeverity::Error,
+                                        format!("Failed to save timeline: {}", error),
+                                    ));
+                                }
+                            }
+                        } else if app.view_mode == ViewMode::Ports {
                             app.toggle_port_sort_direction();
                         } else if app.view_mode == ViewMode::Connections {
                             app.toggle_connection_sort_direction();

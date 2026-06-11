@@ -1,3 +1,7 @@
+use chrono::Local;
+
+use crate::model::NetworkEvent;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommandResult {
     pub stdout: String,
@@ -259,6 +263,39 @@ pub fn copy_to_clipboard(text: &str) -> Result<(), String> {
 
     child.wait().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+pub fn save_timeline_events_to_file(events: &[NetworkEvent]) -> Result<std::path::PathBuf, String> {
+    let export_time = Local::now();
+    let filename = format!(
+        "lazyifconfig-timeline-{}.txt",
+        export_time.format("%Y%m%d-%H%M%S")
+    );
+    let mut content = String::new();
+
+    content.push_str("lazyifconfig timeline export\n");
+    content.push_str(&format!(
+        "exported_at: {}\n",
+        export_time.format("%Y-%m-%d %H:%M:%S")
+    ));
+    content.push_str(&format!("events: {}\n\n", events.len()));
+
+    for event in events.iter() {
+        let datetime: chrono::DateTime<Local> = event.timestamp.into();
+        let message = event.message.replace('\n', " ");
+        content.push_str(&format!(
+            "[{}] {} {} - {}\n",
+            datetime.format("%Y-%m-%d %H:%M:%S"),
+            event.severity.as_str(),
+            event.kind.as_str(),
+            message
+        ));
+    }
+
+    let directory = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
+    let path = directory.join(filename);
+    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    Ok(path)
 }
 
 pub fn run_kill(pid: &str) -> Result<(), String> {
