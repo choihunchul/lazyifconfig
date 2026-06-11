@@ -3,7 +3,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::model::{
     CommandOutput, CommandSourceId, NetworkEvent, NetworkInterface, NetworkSnapshot, PublicIpInfo,
-    Subnet, SystemMetrics,
+    ProcessMetrics, Subnet,
 };
 use crate::tools::{
     ToolAvailability, ToolExecutionState, ToolId, ToolInput, ToolRegistry, ToolResult,
@@ -251,8 +251,7 @@ pub struct App {
     pub update_messages: std::sync::Arc<std::sync::Mutex<Vec<UpdateMessage>>>,
     pub attempted_update_version: Option<String>,
     pub release_notes_viewer: ReleaseNotesViewerState,
-    pub system_metrics: Option<SystemMetrics>,
-    pub previous_cpu_sample: Option<crate::model::CpuSample>,
+    pub process_metrics: Option<ProcessMetrics>,
     pub tools: ToolsState,
     pub pending_tool_results:
         std::sync::Arc<std::sync::Mutex<Vec<(ToolId, Result<ToolResult, String>)>>>,
@@ -317,8 +316,7 @@ impl Default for App {
             update_messages: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             attempted_update_version: None,
             release_notes_viewer: ReleaseNotesViewerState::default(),
-            system_metrics: None,
-            previous_cpu_sample: None,
+            process_metrics: None,
             tools: ToolsState::default(),
             pending_tool_results: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }

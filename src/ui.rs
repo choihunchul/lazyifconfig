@@ -3,7 +3,7 @@ use std::{fs, process::Command, sync::OnceLock};
 use crate::app::{
     App, ConnectionSortColumn, NavigationItem, PortSortColumn, SortDirection, ViewMode,
 };
-use crate::model::{InterfaceStatus, NetworkKind, Subnet, SystemMetrics};
+use crate::model::{InterfaceStatus, NetworkKind, ProcessMetrics, Subnet};
 use chrono::{DateTime, Local};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -31,8 +31,8 @@ fn header_line(app: &App) -> Line<'static> {
         Span::styled(os_display_label(), Style::default().fg(Color::White)),
     ];
 
-    if let Some(metrics) = app.system_metrics.as_ref() {
-        if let Some(summary) = format_system_metrics(metrics) {
+    if let Some(metrics) = app.process_metrics.as_ref() {
+        if let Some(summary) = format_process_metrics(metrics) {
             spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
             spans.push(Span::styled(summary, Style::default().fg(Color::LightCyan)));
         }
@@ -41,19 +41,15 @@ fn header_line(app: &App) -> Line<'static> {
     Line::from(spans)
 }
 
-fn format_system_metrics(metrics: &SystemMetrics) -> Option<String> {
+fn format_process_metrics(metrics: &ProcessMetrics) -> Option<String> {
     let mut parts = Vec::new();
 
-    if let Some(cpu) = metrics.cpu_usage_percent {
-        parts.push(format!("CPU {cpu}%"));
+    if let Some(cpu_tenths) = metrics.cpu_usage_tenths {
+        parts.push(format!("CPU {}%", format_tenths(cpu_tenths)));
     }
 
-    if let (Some(used), Some(total)) = (metrics.memory_used_bytes, metrics.memory_total_bytes) {
-        parts.push(format!(
-            "MEM {}/{}",
-            format_gib(used),
-            format_gib_with_unit(total)
-        ));
+    if let Some(rss) = metrics.memory_rss_bytes {
+        parts.push(format!("MEM {}", format_bytes(rss)));
     }
 
     if parts.is_empty() {
@@ -63,12 +59,24 @@ fn format_system_metrics(metrics: &SystemMetrics) -> Option<String> {
     }
 }
 
-fn format_gib(bytes: u64) -> String {
-    format!("{:.1}", bytes as f64 / 1024.0 / 1024.0 / 1024.0)
+fn format_tenths(value: u16) -> String {
+    format!("{}.{:01}", value / 10, value % 10)
 }
 
-fn format_gib_with_unit(bytes: u64) -> String {
-    format!("{}GB", format_gib(bytes))
+fn format_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.1}GB", bytes as f64 / GIB)
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.1}MB", bytes as f64 / MIB)
+    } else if bytes >= 1024 {
+        format!("{:.1}KB", bytes as f64 / KIB)
+    } else {
+        format!("{bytes}B")
+    }
 }
 
 fn os_display_label() -> &'static str {
@@ -2248,7 +2256,7 @@ fn format_bps(bytes_per_sec: u64) -> String {
 mod tests {
     use super::*;
     use crate::app::App;
-    use crate::model::SystemMetrics;
+    use crate::model::ProcessMetrics;
     use ratatui::{backend::TestBackend, Terminal};
 
     #[test]
@@ -2405,12 +2413,11 @@ mod tests {
     }
 
     #[test]
-    fn test_top_header_shows_cpu_and_memory_usage() {
+    fn test_top_header_shows_process_cpu_and_memory_usage() {
         let mut app = App::default();
-        app.system_metrics = Some(SystemMetrics {
-            cpu_usage_percent: Some(42),
-            memory_used_bytes: Some(8 * 1024 * 1024 * 1024),
-            memory_total_bytes: Some(16 * 1024 * 1024 * 1024),
+        app.process_metrics = Some(ProcessMetrics {
+            cpu_usage_tenths: Some(42),
+            memory_rss_bytes: Some(128 * 1024 * 1024),
         });
 
         let backend = TestBackend::new(120, 24);
@@ -2425,8 +2432,8 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
 
-        assert!(rendered.contains("CPU 42%"));
-        assert!(rendered.contains("MEM 8.0/16.0GB"));
+        assert!(rendered.contains("CPU 4.2%"));
+        assert!(rendered.contains("MEM 128.0MB"));
     }
 
     #[test]
