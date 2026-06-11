@@ -26,6 +26,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             archive: tar.gz
             binary: lazyifconfig
+            deb_arch: amd64
           - os: macos-latest
             target: x86_64-apple-darwin
             archive: tar.gz
@@ -38,6 +39,11 @@ jobs:
             target: x86_64-pc-windows-msvc
             archive: zip
             binary: lazyifconfig.exe
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            archive: tar.gz
+            binary: lazyifconfig
+            deb_arch: arm64
 
     steps:
       - name: Checkout
@@ -48,7 +54,15 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install Linux cross-compilation packages
+        if: ${{ matrix.os == 'ubuntu-latest' && matrix.target == 'aarch64-unknown-linux-gnu' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
       - name: Build
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'aarch64-linux-gnu-gcc' || '' }}
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package
@@ -70,6 +84,36 @@ jobs:
             tar -czf "${package}.tar.gz" "${package}"
           fi
 
+      - name: Package Debian archive
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${GITHUB_REF_NAME#v}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.tag }}"
+            version="${version#v}"
+          fi
+
+          root="deb-${{ matrix.deb_arch }}"
+          mkdir -p "${root}/DEBIAN" "${root}/usr/bin"
+
+          printf '%s\n' \
+            "Package: lazyifconfig" \
+            "Version: ${version}" \
+            "Section: utils" \
+            "Priority: optional" \
+            "Architecture: ${{ matrix.deb_arch }}" \
+            "Maintainer: Hunchul Choi" \
+            "Description: Terminal UI for inspecting local network state" \
+            > "${root}/DEBIAN/control"
+
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "${root}/usr/bin/lazyifconfig"
+          chmod 0755 "${root}/usr/bin/lazyifconfig"
+
+          dpkg-deb --build "${root}" "lazyifconfig_${version}_${{ matrix.deb_arch }}.deb"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -77,6 +121,7 @@ jobs:
           path: |
             lazyifconfig-*.tar.gz
             lazyifconfig-*.zip
+            lazyifconfig_*.deb
 
   release:
     name: Create GitHub Release

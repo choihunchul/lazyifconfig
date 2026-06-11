@@ -47,6 +47,14 @@ From Homebrew tap:
 brew install choihunchul/tap/lazyifconfig
 ```
 
+From the APT repository on Debian or Ubuntu:
+
+```bash
+echo "deb [trusted=yes] https://choihunchul.github.io/apt-repo stable main" | sudo tee /etc/apt/sources.list.d/choihunchul.list
+sudo apt update
+sudo apt install lazyifconfig
+```
+
 From crates.io:
 
 ```bash
@@ -123,22 +131,26 @@ cargo test
 GitHub Actions creates a release when a tag matching `v*` is pushed.
 
 ```bash
-git tag v0.2.4
-git push origin v0.2.4
+git tag v0.2.10
+git push origin v0.2.10
 ```
 
 After the `Release` workflow finishes, the Homebrew tap workflow runs automatically and updates `choihunchul/homebrew-tap`.
-You can also rerun `Publish Homebrew Tap` manually from GitHub Actions by providing a tag such as `0.2.4` or `v0.2.4`.
+You can also rerun `Publish Homebrew Tap` manually from GitHub Actions by providing a tag such as `0.2.10` or `v0.2.10`.
+
+After the same `Release` workflow finishes, the `Publish APT Repository` workflow runs automatically and publishes
+the `amd64` and `arm64` `.deb` assets to `choihunchul/apt-repo`.
+You can also rerun `Publish APT Repository` manually from GitHub Actions by providing a tag such as `0.2.10` or `v0.2.10`.
 
 You can also trigger the `Create Release Tag` workflow from GitHub Actions.
-Enter `0.2.4` or `v0.2.4` as the input, and it will:
+Enter `0.2.10` or `v0.2.10` as the input, and it will:
 
 - verify the version matches `Cargo.toml`
 - create an annotated `v*` tag
 - push the tag so the `Release` workflow builds artifacts and publishes the GitHub Release
 
 For crates.io publishing, trigger the `Publish Crate` workflow from GitHub Actions.
-Enter `0.2.4` or `v0.2.4`, and it will:
+Enter `0.2.10` or `v0.2.10`, and it will:
 
 - verify the version matches `Cargo.toml`
 - run `cargo publish --dry-run --locked`
@@ -152,9 +164,17 @@ For Homebrew publishing, add a `HOMEBREW_TAP_TOKEN` secret with push access to
 - write `Formula/lazyifconfig.rb` into the tap repository
 - push the formula update so `brew install choihunchul/tap/lazyifconfig` works
 
+For APT publishing, add an `APT_REPO_TOKEN` secret with push access to
+`choihunchul/apt-repo`. The `Publish APT Repository` workflow will:
+
+- download the `amd64` and `arm64` `.deb` assets for the selected tag
+- update the APT package index and `Release` metadata in `choihunchul/apt-repo`
+- push the repository update so `apt install lazyifconfig` works after `apt update`
+
 The release workflow builds and uploads artifacts for:
 
 - Linux `x86_64-unknown-linux-gnu`
+- Linux `aarch64-unknown-linux-gnu`
 - macOS `x86_64-apple-darwin`
 - macOS `aarch64-apple-darwin`
 - Windows `x86_64-pc-windows-msvc`
