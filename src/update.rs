@@ -30,9 +30,7 @@ pub struct AvailableUpdate {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CheckOutcome {
-    UpToDate {
-        current_version: String,
-    },
+    UpToDate { current_version: String },
     Available(AvailableUpdate),
 }
 
@@ -88,7 +86,9 @@ struct GitHubReleaseResponse {
 
 pub fn release_api_url() -> Result<String, String> {
     let repo = repository_slug()?;
-    Ok(format!("https://api.github.com/repos/{repo}/releases/latest"))
+    Ok(format!(
+        "https://api.github.com/repos/{repo}/releases/latest"
+    ))
 }
 
 pub fn evaluate_release_json(json: &str) -> Result<CheckOutcome, String> {
@@ -101,9 +101,8 @@ pub fn evaluate_release_json(json: &str) -> Result<CheckOutcome, String> {
             let target = target_triple()
                 .ok_or_else(|| "unsupported platform for self-update".to_string())?;
             let release_url = release.html_url.clone();
-            let asset = select_release_asset(&release, target).ok_or_else(|| {
-                format!("no release asset found for target {target}")
-            })?;
+            let asset = select_release_asset(&release, target)
+                .ok_or_else(|| format!("no release asset found for target {target}"))?;
 
             Ok(CheckOutcome::Available(AvailableUpdate {
                 current_version,
@@ -296,10 +295,7 @@ fn target_triple() -> Option<&'static str> {
     }
 }
 
-fn select_release_asset<'a>(
-    release: &'a ReleaseInfo,
-    target: &str,
-) -> Option<&'a ReleaseAsset> {
+fn select_release_asset<'a>(release: &'a ReleaseInfo, target: &str) -> Option<&'a ReleaseAsset> {
     let tarball_suffix = format!("-{target}.tar.gz");
     let zip_suffix = format!("-{target}.zip");
 
@@ -307,7 +303,12 @@ fn select_release_asset<'a>(
         .assets
         .iter()
         .find(|asset| asset.name.ends_with(&tarball_suffix))
-        .or_else(|| release.assets.iter().find(|asset| asset.name.ends_with(&zip_suffix)))
+        .or_else(|| {
+            release
+                .assets
+                .iter()
+                .find(|asset| asset.name.ends_with(&zip_suffix))
+        })
 }
 
 fn create_temp_update_dir() -> Result<PathBuf, String> {
@@ -315,10 +316,8 @@ fn create_temp_update_dir() -> Result<PathBuf, String> {
         .duration_since(UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "lazyifconfig-update-{}-{now}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("lazyifconfig-update-{}-{now}", std::process::id()));
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }
@@ -368,7 +367,10 @@ mod tests {
         };
 
         assert_eq!(update.target_version, "9.9.9");
-        assert_eq!(update.asset_name, format!("lazyifconfig-v9.9.9-{target}.tar.gz"));
+        assert_eq!(
+            update.asset_name,
+            format!("lazyifconfig-v9.9.9-{target}.tar.gz")
+        );
         assert!(update.release_notes.contains("Highlights"));
         assert!(update.release_notes.contains("Faster scans"));
     }

@@ -43,6 +43,14 @@ pub fn parse_connections(input: &str) -> Vec<ActiveConnection> {
 }
 
 fn split_ip_port(addr: &str) -> (String, String) {
+    if let Some(pos) = addr.rfind(':') {
+        let ip = clean_socket_ip(&addr[..pos]);
+        let port = addr[pos + 1..].to_string();
+        if !port.is_empty() {
+            return (ip, port);
+        }
+    }
+
     if let Some(pos) = addr.rfind('.') {
         let ip = addr[..pos].to_string();
         let port = addr[pos + 1..].to_string();
@@ -50,4 +58,8 @@ fn split_ip_port(addr: &str) -> (String, String) {
     } else {
         (addr.to_string(), "*".to_string())
     }
+}
+
+fn clean_socket_ip(ip: &str) -> String {
+    ip.trim_start_matches('[').trim_end_matches(']').to_string()
 }

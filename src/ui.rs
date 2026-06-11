@@ -146,6 +146,7 @@ fn get_active_command(view_mode: ViewMode) -> &'static str {
                 "netstat -rn"
             }
         }
+        ViewMode::Tools => "tool-runner",
         ViewMode::Timeline => "event-logger",
     }
 }
@@ -177,6 +178,9 @@ fn get_status_text(app: &App) -> String {
         }
         ViewMode::Routes => {
             " q | u check | U update | R notes | [/] | i/n/c/p/e | j/k ".to_string()
+        }
+        ViewMode::Tools => {
+            " q | / input | Tab field | Enter run | r rerun | [/] scroll | i/n/p/c/g/e ".to_string()
         }
         _ => {
             format!(
@@ -227,6 +231,7 @@ fn view_tabs(view_mode: ViewMode) -> Line<'static> {
         (ViewMode::Ports, "Port(p)"),
         (ViewMode::Connections, "Connection(c)"),
         (ViewMode::Routes, "Route(g)"),
+        (ViewMode::Tools, "Tools(t)"),
         (ViewMode::Timeline, "Timeline(e)"),
     ];
 
@@ -301,6 +306,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         ViewMode::Ports => " Listening Ports ",
         ViewMode::Timeline => " Event Timeline ",
         ViewMode::Routes => " Routes ",
+        ViewMode::Tools => " Tools ",
     };
     let list_block = Block::default().borders(Borders::ALL).title(title);
 
@@ -458,7 +464,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
             }
         }
     }
-    if app.view_mode == ViewMode::Ports {
+    if app.view_mode == ViewMode::Tools {
+        render_tools_view(frame, app, top_chunks[0], top_chunks[1]);
+    } else if app.view_mode == ViewMode::Ports {
         render_ports_table(frame, app, list_block, top_chunks[0]);
     } else if app.view_mode == ViewMode::Connections {
         render_connections_table(frame, app, list_block, top_chunks[0]);
@@ -473,7 +481,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let details_inner = details_block.inner(top_chunks[1]);
     frame.render_widget(details_block, top_chunks[1]);
 
-    if let Some(selected_item) = app.navigation_items.get(app.selected_index) {
+    if app.view_mode == ViewMode::Tools {
+        render_tools_view(frame, app, top_chunks[0], top_chunks[1]);
+    } else if let Some(selected_item) = app.navigation_items.get(app.selected_index) {
         match selected_item {
             NavigationItem::SubnetHeader(subnet) => {
                 let mut details_text = String::new();
@@ -1181,6 +1191,156 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if app.raw_viewer.active {
         draw_raw_viewer(frame, app);
     }
+}
+
+fn render_tools_view(frame: &mut Frame, app: &App, list_area: Rect, details_area: Rect) {
+    let mut tool_items = Vec::new();
+    for (idx, definition) in app.tools.registry.definitions().iter().enumerate() {
+        let selected = idx == app.tools.selected_index;
+        let mut style = if selected {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let suffix = match definition.availability {
+            crate::tools::ToolAvailability::Runnable => "",
+            crate::tools::ToolAvailability::Planned => " (planned)",
+        };
+        if definition.availability == crate::tools::ToolAvailability::Planned && !selected {
+            style = style.fg(Color::DarkGray);
+        }
+        tool_items.push(ListItem::new(format!("{}{}", definition.name, suffix)).style(style));
+    }
+
+    let tool_list =
+        List::new(tool_items).block(Block::default().borders(Borders::ALL).title(" Tools "));
+    frame.render_widget(tool_list, list_area);
+
+    let definition = app.tools.selected_definition();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length((definition.fields.len() as u16).saturating_add(4).max(5)),
+            Constraint::Percentage(38),
+            Constraint::Percentage(42),
+        ])
+        .split(details_area);
+
+    let mut input_lines = Vec::new();
+    input_lines.push(Line::from(Span::styled(
+        definition.description,
+        Style::default().fg(Color::White),
+    )));
+    input_lines.push(Line::from(""));
+
+    let selected_input = app.tools.inputs.get(&definition.id);
+    for (idx, field) in definition.fields.iter().enumerate() {
+        let value = selected_input
+            .and_then(|input| input.values.get(field.key))
+            .map(String::as_str)
+            .unwrap_or("");
+        let shown = if value.is_empty() {
+            field.placeholder
+        } else {
+            value
+        };
+        let marker = if idx == app.tools.selected_field_index {
+            ">"
+        } else {
+            " "
+        };
+        let style = if idx == app.tools.selected_field_index && app.tools.editing_input {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        input_lines.push(Line::from(vec![
+            Span::styled(format!("{marker} {}: ", field.label), style),
+            Span::styled(shown.to_string(), style),
+        ]));
+    }
+
+    if definition.availability == crate::tools::ToolAvailability::Planned {
+        input_lines.push(Line::from(""));
+        input_lines.push(Line::from(Span::styled(
+            "planned / disabled",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    frame.render_widget(
+        Paragraph::new(input_lines)
+            .wrap(Wrap { trim: true })
+            .block(Block::default().borders(Borders::ALL).title(" Input ")),
+        chunks[0],
+    );
+
+    let state = app
+        .tools
+        .states
+        .get(&definition.id)
+        .copied()
+        .unwrap_or(crate::tools::ToolExecutionState::Idle);
+    let mut result_lines = Vec::new();
+    match state {
+        crate::tools::ToolExecutionState::Running => {
+            result_lines.push(Line::from("Running..."));
+        }
+        crate::tools::ToolExecutionState::Failed => {
+            result_lines.push(Line::from(Span::styled(
+                "Error",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )));
+            if let Some(error) = app.tools.errors.get(&definition.id) {
+                result_lines.push(Line::from(error.clone()));
+            }
+        }
+        _ => {
+            if let Some(result) = app.tools.results.get(&definition.id) {
+                for section in &result.sections {
+                    result_lines.push(Line::from(Span::styled(
+                        section.label.clone(),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    )));
+                    for line in &section.lines {
+                        result_lines.push(Line::from(line.clone()));
+                    }
+                    result_lines.push(Line::from(""));
+                }
+            } else if definition.availability == crate::tools::ToolAvailability::Runnable {
+                result_lines.push(Line::from("Press / to edit input, then Enter to run."));
+            } else {
+                result_lines.push(Line::from("This tool is planned for a follow-up slice."));
+            }
+        }
+    }
+
+    frame.render_widget(
+        Paragraph::new(result_lines)
+            .wrap(Wrap { trim: true })
+            .block(Block::default().borders(Borders::ALL).title(" Results ")),
+        chunks[1],
+    );
+
+    let raw_output = app
+        .tools
+        .results
+        .get(&definition.id)
+        .map(|result| result.raw_output.as_str())
+        .unwrap_or("Raw output appears here after a tool runs.");
+    frame.render_widget(
+        Paragraph::new(raw_output.to_string())
+            .wrap(Wrap { trim: false })
+            .scroll((app.tools.raw_scroll, 0))
+            .block(Block::default().borders(Borders::ALL).title(" Raw Output ")),
+        chunks[2],
+    );
 }
 
 fn render_ports_table(frame: &mut Frame, app: &App, block: Block<'_>, area: Rect) {
@@ -2407,6 +2567,34 @@ mod tests {
         });
 
         assert!(has_highlight);
+    }
+
+    #[test]
+    fn draw_tools_view_lists_runnable_and_planned_tools() {
+        let mut app = App::default();
+        app.set_view_mode(ViewMode::Tools);
+
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("Tools(t)"));
+        assert!(rendered.contains("DNS Lookup"));
+        assert!(rendered.contains("Port Check"));
+        assert!(rendered.contains("Ping"));
+        assert!(rendered.contains("Whois Lookup"));
+        assert!(rendered.contains("planned"));
+        assert!(rendered.contains("Input"));
+        assert!(rendered.contains("Results"));
+        assert!(rendered.contains("Raw Output"));
     }
 
     #[test]

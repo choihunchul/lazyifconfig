@@ -498,6 +498,34 @@ fn drain_update_messages(app: &mut App) {
     }
 }
 
+fn start_selected_tool(app: &mut App) {
+    let tool_id = app.tools.selected_tool_id();
+    if !app.tools.selected_tool_is_runnable() {
+        app.tools.errors.insert(
+            tool_id,
+            "This tool is planned and is not executable yet.".to_string(),
+        );
+        app.tools
+            .states
+            .insert(tool_id, lazyifconfig::tools::ToolExecutionState::Failed);
+        return;
+    }
+
+    let input = app.tools.input_for_selected_tool().clone();
+    app.tools.errors.remove(&tool_id);
+    app.tools
+        .states
+        .insert(tool_id, lazyifconfig::tools::ToolExecutionState::Running);
+
+    let pending = app.pending_tool_results.clone();
+    tokio::spawn(async move {
+        let result = lazyifconfig::tools::run_tool(tool_id, input).await;
+        if let Ok(mut lock) = pending.lock() {
+            lock.push((tool_id, result));
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode()?;
@@ -513,6 +541,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tick_rate = Duration::from_secs(2);
 
     loop {
+        app.drain_pending_tool_results();
         terminal.draw(|f| lazyifconfig::ui::draw(f, &app))?;
 
         let timeout = tick_rate
@@ -731,6 +760,90 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
+                if app.view_mode == ViewMode::Tools {
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Char('ㅂ') => break,
+                        KeyCode::Esc => {
+                            app.help_visible = false;
+                            app.tools.stop_input_editing();
+                        }
+                        KeyCode::Char('?') => {
+                            app.help_visible = !app.help_visible;
+                        }
+                        KeyCode::Char('i') | KeyCode::Char('ㅑ') => {
+                            app.help_visible = false;
+                            app.set_view_mode(ViewMode::Interface);
+                        }
+                        KeyCode::Char('n') | KeyCode::Char('ㅜ') => {
+                            app.help_visible = false;
+                            app.set_view_mode(ViewMode::Network);
+                        }
+                        KeyCode::Char('p') | KeyCode::Char('ㅔ') => {
+                            app.help_visible = false;
+                            app.set_view_mode(ViewMode::Ports);
+                        }
+                        KeyCode::Char('c') | KeyCode::Char('ㅊ') => {
+                            app.help_visible = false;
+                            app.set_view_mode(ViewMode::Connections);
+                        }
+                        KeyCode::Char('g') | KeyCode::Char('ㅎ') => {
+                            app.help_visible = false;
+                            app.set_view_mode(ViewMode::Routes);
+                        }
+                        KeyCode::Char('e') | KeyCode::Char('ㄷ') => {
+                            app.help_visible = false;
+                            app.set_view_mode(ViewMode::Timeline);
+                        }
+                        KeyCode::Char('h') | KeyCode::Left | KeyCode::Char('ㅗ') => {
+                            app.help_visible = false;
+                            app.select_previous_view_mode();
+                        }
+                        KeyCode::Char('l') | KeyCode::Right | KeyCode::Char('ㅣ') => {
+                            app.help_visible = false;
+                            app.select_next_view_mode();
+                        }
+                        KeyCode::Char('j') | KeyCode::Down | KeyCode::Char('ㅓ')
+                            if !app.tools.editing_input =>
+                        {
+                            app.tools.select_next_tool();
+                        }
+                        KeyCode::Char('k') | KeyCode::Up | KeyCode::Char('ㅏ')
+                            if !app.tools.editing_input =>
+                        {
+                            app.tools.select_previous_tool();
+                        }
+                        KeyCode::Char('/') => {
+                            app.help_visible = false;
+                            app.tools.start_input_editing();
+                        }
+                        KeyCode::Tab => {
+                            app.tools.select_next_field();
+                            app.tools.start_input_editing();
+                        }
+                        KeyCode::Backspace if app.tools.editing_input => {
+                            app.tools.pop_input_char();
+                        }
+                        KeyCode::Enter if app.tools.editing_input => {
+                            app.tools.stop_input_editing();
+                        }
+                        KeyCode::Enter | KeyCode::Char('r') | KeyCode::Char('ㄱ') => {
+                            app.help_visible = false;
+                            start_selected_tool(&mut app);
+                        }
+                        KeyCode::Char('[') => {
+                            app.tools.raw_scroll = app.tools.raw_scroll.saturating_sub(1);
+                        }
+                        KeyCode::Char(']') => {
+                            app.tools.raw_scroll = app.tools.raw_scroll.saturating_add(1);
+                        }
+                        KeyCode::Char(c) if app.tools.editing_input => {
+                            app.tools.push_input_char(c);
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 // --- Normal mode ---
                 match key.code {
                     KeyCode::Esc => {
@@ -759,6 +872,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 CommandSourceId::PublicIp,
                                 CommandSourceId::GitHubRelease,
                             ],
+                            ViewMode::Tools => Vec::new(),
                         };
                         if !sources.is_empty() {
                             app.raw_viewer.active = true;
@@ -894,6 +1008,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     KeyCode::Char('g') | KeyCode::Char('ㅎ') => {
                         app.help_visible = false;
                         app.set_view_mode(ViewMode::Routes);
+                    }
+                    KeyCode::Char('t') | KeyCode::Char('ㅅ') => {
+                        app.help_visible = false;
+                        app.set_view_mode(ViewMode::Tools);
                     }
                     KeyCode::Char('c') | KeyCode::Char('ㅊ') => {
                         app.help_visible = false;

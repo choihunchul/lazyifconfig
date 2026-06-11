@@ -109,6 +109,9 @@ fn view_mode_cycles_in_top_tab_order() {
     assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Routes);
 
     app.select_next_view_mode();
+    assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Tools);
+
+    app.select_next_view_mode();
     assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Timeline);
 
     app.select_next_view_mode();
@@ -116,6 +119,53 @@ fn view_mode_cycles_in_top_tab_order() {
 
     app.select_previous_view_mode();
     assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Timeline);
+}
+
+#[test]
+fn tools_view_is_in_tab_cycle_between_routes_and_timeline() {
+    let mut app = App::default();
+
+    app.set_view_mode(lazyifconfig::app::ViewMode::Routes);
+    app.select_next_view_mode();
+    assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Tools);
+
+    app.select_next_view_mode();
+    assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Timeline);
+}
+
+#[test]
+fn tools_state_selects_planned_registry_entries_without_running_them() {
+    let mut app = App::default();
+    app.set_view_mode(lazyifconfig::app::ViewMode::Tools);
+
+    assert_eq!(
+        app.tools.selected_tool_id(),
+        lazyifconfig::tools::ToolId::DnsLookup
+    );
+    app.tools.select_next_tool();
+    assert_eq!(
+        app.tools.selected_tool_id(),
+        lazyifconfig::tools::ToolId::WhoisLookup
+    );
+    assert!(!app.tools.selected_tool_is_runnable());
+}
+
+#[test]
+fn tools_input_editing_updates_selected_field() {
+    let mut app = App::default();
+    app.set_view_mode(lazyifconfig::app::ViewMode::Tools);
+
+    app.tools.start_input_editing();
+    app.tools.push_input_char('g');
+    app.tools.push_input_char('h');
+
+    let value = app
+        .tools
+        .input_for_selected_tool()
+        .get("target")
+        .unwrap()
+        .to_string();
+    assert_eq!(value, "gh");
 }
 
 #[test]

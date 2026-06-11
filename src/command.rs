@@ -246,7 +246,10 @@ mod tests {
 
         assert_eq!(command.display, "ip -details -statistics address show");
         assert_eq!(command.program, "ip");
-        assert_eq!(command.args, &["-details", "-statistics", "address", "show"]);
+        assert_eq!(
+            command.args,
+            &["-details", "-statistics", "address", "show"]
+        );
     }
 
     #[test]

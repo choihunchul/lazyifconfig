@@ -243,12 +243,26 @@ impl Ord for Subnet {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         use std::cmp::Ordering;
         match (self, other) {
-            (Subnet::Ipv4 { network: n1, prefix_len: p1 }, Subnet::Ipv4 { network: n2, prefix_len: p2 }) => {
-                n1.cmp(n2).then(p1.cmp(p2))
-            }
-            (Subnet::Ipv6 { network: n1, prefix_len: p1 }, Subnet::Ipv6 { network: n2, prefix_len: p2 }) => {
-                n1.cmp(n2).then(p1.cmp(p2))
-            }
+            (
+                Subnet::Ipv4 {
+                    network: n1,
+                    prefix_len: p1,
+                },
+                Subnet::Ipv4 {
+                    network: n2,
+                    prefix_len: p2,
+                },
+            ) => n1.cmp(n2).then(p1.cmp(p2)),
+            (
+                Subnet::Ipv6 {
+                    network: n1,
+                    prefix_len: p1,
+                },
+                Subnet::Ipv6 {
+                    network: n2,
+                    prefix_len: p2,
+                },
+            ) => n1.cmp(n2).then(p1.cmp(p2)),
             (Subnet::Unassigned, Subnet::Unassigned) => Ordering::Equal,
             (Subnet::Ipv4 { .. }, _) => Ordering::Less,
             (_, Subnet::Ipv4 { .. }) => Ordering::Greater,
@@ -309,7 +323,9 @@ impl CommandSourceId {
                 }
             }
             CommandSourceId::PublicIp => "curl -s -m 5 https://ipinfo.io/json",
-            CommandSourceId::GitHubRelease => "curl -s -L https://api.github.com/repos/<owner>/<repo>/releases/latest",
+            CommandSourceId::GitHubRelease => {
+                "curl -s -L https://api.github.com/repos/<owner>/<repo>/releases/latest"
+            }
             CommandSourceId::Arp => "arp -a",
         }
     }

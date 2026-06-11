@@ -4,11 +4,13 @@ use crate::model::{InterfaceStats, NetworkInterface};
 
 pub fn parse_stats(input: &str) -> HashMap<String, InterfaceStats> {
     let mut current_name: Option<String> = None;
+    let mut pending_ip_stat: Option<StatDirection> = None;
     let mut stats_by_name: HashMap<String, InterfaceStats> = HashMap::new();
 
     for line in input.lines() {
-        if is_interface_header(line) {
-            current_name = Some(line.split(':').next().unwrap_or_default().to_string());
+        if let Some(name) = parse_interface_header_name(line) {
+            current_name = Some(name);
+            pending_ip_stat = None;
             continue;
         }
 
@@ -17,6 +19,32 @@ pub fn parse_stats(input: &str) -> HashMap<String, InterfaceStats> {
         };
 
         let trimmed = line.trim();
+        if trimmed.starts_with("RX:") {
+            pending_ip_stat = Some(StatDirection::Rx);
+            continue;
+        } else if trimmed.starts_with("TX:") {
+            pending_ip_stat = Some(StatDirection::Tx);
+            continue;
+        }
+
+        if let Some(direction) = pending_ip_stat.take() {
+            let Some((packets, bytes)) = parse_ip_stat_values(trimmed) else {
+                continue;
+            };
+            let stats = stats_by_name.entry(name.clone()).or_default();
+            match direction {
+                StatDirection::Rx => {
+                    stats.rx_packets = packets;
+                    stats.rx_bytes = bytes;
+                }
+                StatDirection::Tx => {
+                    stats.tx_packets = packets;
+                    stats.tx_bytes = bytes;
+                }
+            }
+            continue;
+        }
+
         let Some((direction, packets, bytes)) = parse_stat_line(trimmed) else {
             continue;
         };
@@ -101,8 +129,26 @@ fn parse_netstat_ib(input: &str) -> HashMap<String, InterfaceStats> {
     stats_by_name
 }
 
-fn is_interface_header(line: &str) -> bool {
-    !line.starts_with(' ') && !line.starts_with('\t') && line.contains(':')
+fn parse_interface_header_name(line: &str) -> Option<String> {
+    if line.starts_with(' ') || line.starts_with('\t') {
+        return None;
+    }
+
+    let (first, rest) = line.split_once(':')?;
+    if first.chars().all(|c| c.is_ascii_digit()) {
+        let (name, _) = rest.trim_start().split_once(':')?;
+        return Some(clean_interface_name(name));
+    }
+
+    Some(clean_interface_name(first))
+}
+
+fn clean_interface_name(name: &str) -> String {
+    name.trim()
+        .split('@')
+        .next()
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn parse_stat_line(line: &str) -> Option<(StatDirection, u64, u64)> {
@@ -121,6 +167,18 @@ fn parse_stat_line(line: &str) -> Option<(StatDirection, u64, u64)> {
     }
 }
 
+fn parse_ip_stat_values(line: &str) -> Option<(u64, u64)> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    let bytes = parts[0].parse().ok()?;
+    let packets = parts[1].parse().ok()?;
+    Some((packets, bytes))
+}
+
+#[derive(Clone, Copy)]
 enum StatDirection {
     Rx,
     Tx,

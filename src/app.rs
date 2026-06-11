@@ -5,6 +5,9 @@ use crate::model::{
     CommandOutput, CommandSourceId, NetworkEvent, NetworkInterface, NetworkSnapshot, PublicIpInfo,
     Subnet, SystemMetrics,
 };
+use crate::tools::{
+    ToolAvailability, ToolExecutionState, ToolId, ToolInput, ToolRegistry, ToolResult,
+};
 use crate::update::{AvailableUpdate, UpdateMessage, UpdateStatus};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,6 +18,7 @@ pub enum ViewMode {
     Ports,
     Timeline,
     Routes,
+    Tools,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,12 +44,13 @@ pub enum SortDirection {
     Descending,
 }
 
-const VIEW_MODE_TABS: [ViewMode; 6] = [
+const VIEW_MODE_TABS: [ViewMode; 7] = [
     ViewMode::Interface,
     ViewMode::Network,
     ViewMode::Ports,
     ViewMode::Connections,
     ViewMode::Routes,
+    ViewMode::Tools,
     ViewMode::Timeline,
 ];
 
@@ -94,6 +99,125 @@ pub struct InterfaceHistory {
 }
 
 #[derive(Clone, Debug)]
+pub struct ToolsState {
+    pub registry: ToolRegistry,
+    pub selected_index: usize,
+    pub selected_field_index: usize,
+    pub editing_input: bool,
+    pub inputs: HashMap<ToolId, ToolInput>,
+    pub results: HashMap<ToolId, ToolResult>,
+    pub errors: HashMap<ToolId, String>,
+    pub states: HashMap<ToolId, ToolExecutionState>,
+    pub raw_scroll: u16,
+}
+
+impl Default for ToolsState {
+    fn default() -> Self {
+        Self {
+            registry: ToolRegistry::default(),
+            selected_index: 0,
+            selected_field_index: 0,
+            editing_input: false,
+            inputs: HashMap::new(),
+            results: HashMap::new(),
+            errors: HashMap::new(),
+            states: HashMap::new(),
+            raw_scroll: 0,
+        }
+    }
+}
+
+impl ToolsState {
+    pub fn selected_tool_id(&self) -> ToolId {
+        self.registry.definitions()[self.selected_index].id
+    }
+
+    pub fn selected_definition(&self) -> &crate::tools::ToolDefinition {
+        &self.registry.definitions()[self.selected_index]
+    }
+
+    pub fn selected_tool_is_runnable(&self) -> bool {
+        self.selected_definition().availability == ToolAvailability::Runnable
+    }
+
+    pub fn select_next_tool(&mut self) {
+        let len = self.registry.definitions().len();
+        if len > 0 {
+            self.selected_index = (self.selected_index + 1) % len;
+            self.selected_field_index = 0;
+            self.raw_scroll = 0;
+        }
+    }
+
+    pub fn select_previous_tool(&mut self) {
+        let len = self.registry.definitions().len();
+        if len > 0 {
+            self.selected_index = if self.selected_index == 0 {
+                len - 1
+            } else {
+                self.selected_index - 1
+            };
+            self.selected_field_index = 0;
+            self.raw_scroll = 0;
+        }
+    }
+
+    pub fn input_for_selected_tool(&mut self) -> &mut ToolInput {
+        let id = self.selected_tool_id();
+        self.inputs.entry(id).or_insert_with(|| {
+            let mut input = ToolInput::default();
+            if let Some(definition) = self.registry.definition(id) {
+                for field in definition.fields {
+                    input.values.insert(field.key.to_string(), String::new());
+                }
+            }
+            input
+        })
+    }
+
+    pub fn start_input_editing(&mut self) {
+        self.editing_input = true;
+    }
+
+    pub fn stop_input_editing(&mut self) {
+        self.editing_input = false;
+    }
+
+    pub fn select_next_field(&mut self) {
+        let field_count = self.selected_definition().fields.len();
+        if field_count > 0 {
+            self.selected_field_index = (self.selected_field_index + 1) % field_count;
+        }
+    }
+
+    pub fn push_input_char(&mut self, c: char) {
+        if self.selected_definition().fields.is_empty() {
+            return;
+        }
+        let field_key = self.selected_definition().fields[self.selected_field_index]
+            .key
+            .to_string();
+        self.input_for_selected_tool()
+            .values
+            .entry(field_key)
+            .or_default()
+            .push(c);
+    }
+
+    pub fn pop_input_char(&mut self) {
+        if self.selected_definition().fields.is_empty() {
+            return;
+        }
+        let field_key = self.selected_definition().fields[self.selected_field_index]
+            .key
+            .to_string();
+        if let Some(value) = self.input_for_selected_tool().values.get_mut(&field_key) {
+            value.pop();
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct App {
     pub current_snapshot: Option<NetworkSnapshot>,
     pub previous_snapshot: Option<NetworkSnapshot>,
@@ -129,6 +253,9 @@ pub struct App {
     pub release_notes_viewer: ReleaseNotesViewerState,
     pub system_metrics: Option<SystemMetrics>,
     pub previous_cpu_sample: Option<crate::model::CpuSample>,
+    pub tools: ToolsState,
+    pub pending_tool_results:
+        std::sync::Arc<std::sync::Mutex<Vec<(ToolId, Result<ToolResult, String>)>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,6 +319,8 @@ impl Default for App {
             release_notes_viewer: ReleaseNotesViewerState::default(),
             system_metrics: None,
             previous_cpu_sample: None,
+            tools: ToolsState::default(),
+            pending_tool_results: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 }
@@ -465,7 +594,9 @@ impl App {
     }
 
     pub fn update_navigation_items(&mut self) {
-        if self.view_mode != ViewMode::Timeline && self.current_snapshot.is_none() {
+        if !matches!(self.view_mode, ViewMode::Timeline | ViewMode::Tools)
+            && self.current_snapshot.is_none()
+        {
             self.navigation_items = Vec::new();
             return;
         }
@@ -653,6 +784,9 @@ impl App {
                         index: idx,
                     })
                     .collect();
+            }
+            ViewMode::Tools => {
+                self.navigation_items = Vec::new();
             }
         }
     }
@@ -940,6 +1074,28 @@ impl App {
         if self.recent_events.len() > 100 {
             let overflow = self.recent_events.len() - 100;
             self.recent_events.drain(0..overflow);
+        }
+    }
+
+    pub fn drain_pending_tool_results(&mut self) {
+        let drained = if let Ok(mut lock) = self.pending_tool_results.lock() {
+            lock.drain(..).collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+
+        for (id, result) in drained {
+            match result {
+                Ok(result) => {
+                    self.tools.states.insert(id, ToolExecutionState::Succeeded);
+                    self.tools.errors.remove(&id);
+                    self.tools.results.insert(id, result);
+                }
+                Err(error) => {
+                    self.tools.states.insert(id, ToolExecutionState::Failed);
+                    self.tools.errors.insert(id, error);
+                }
+            }
         }
     }
 }

@@ -76,27 +76,51 @@ fn infers_interface_types_from_name_rules() {
     let mixed = parse_interfaces(include_str!("../fixtures/docker.txt"));
 
     assert_eq!(
-        wifi_like.iter().find(|item| item.name == "en0").unwrap().interface_type,
+        wifi_like
+            .iter()
+            .find(|item| item.name == "en0")
+            .unwrap()
+            .interface_type,
         InterfaceType::WifiOrEthernet
     );
     assert_eq!(
-        wifi_like.iter().find(|item| item.name == "lo0").unwrap().interface_type,
+        wifi_like
+            .iter()
+            .find(|item| item.name == "lo0")
+            .unwrap()
+            .interface_type,
         InterfaceType::Loopback
     );
     assert_eq!(
-        vpn_like.iter().find(|item| item.name == "utun4").unwrap().interface_type,
+        vpn_like
+            .iter()
+            .find(|item| item.name == "utun4")
+            .unwrap()
+            .interface_type,
         InterfaceType::Vpn
     );
     assert_eq!(
-        mixed.iter().find(|item| item.name == "bridge0").unwrap().interface_type,
+        mixed
+            .iter()
+            .find(|item| item.name == "bridge0")
+            .unwrap()
+            .interface_type,
         InterfaceType::Bridge
     );
     assert_eq!(
-        mixed.iter().find(|item| item.name == "awdl0").unwrap().interface_type,
+        mixed
+            .iter()
+            .find(|item| item.name == "awdl0")
+            .unwrap()
+            .interface_type,
         InterfaceType::AirDrop
     );
     assert_eq!(
-        mixed.iter().find(|item| item.name == "mystery0").unwrap().interface_type,
+        mixed
+            .iter()
+            .find(|item| item.name == "mystery0")
+            .unwrap()
+            .interface_type,
         InterfaceType::Unknown
     );
 }
@@ -125,12 +149,18 @@ fn test_network_classification_priority() {
     // utun은 사설 IP가 있어도 VPN으로 분류되어야 함
     let input = "utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n\tinet 10.8.0.2 netmask 0xffffff00";
     let parsed = parse_interfaces(input);
-    assert_eq!(parsed[0].network_kind, lazyifconfig::model::NetworkKind::Vpn);
+    assert_eq!(
+        parsed[0].network_kind,
+        lazyifconfig::model::NetworkKind::Vpn
+    );
 
     // en0에 사설 IP가 있으면 LAN
     let input2 = "en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n\tinet 192.168.0.15 netmask 0xffffff00";
     let parsed2 = parse_interfaces(input2);
-    assert_eq!(parsed2[0].network_kind, lazyifconfig::model::NetworkKind::Lan);
+    assert_eq!(
+        parsed2[0].network_kind,
+        lazyifconfig::model::NetworkKind::Lan
+    );
 }
 
 #[test]
@@ -157,7 +187,10 @@ fn test_gateway_parsing() {
     };
     let mut interfaces2 = vec![en0];
     lazyifconfig::collector::interface::merge_gateways(&mut interfaces2, netstat_input);
-    assert_eq!(interfaces2[0].ipv4[0].gateway, Some("192.168.0.1".to_string()));
+    assert_eq!(
+        interfaces2[0].ipv4[0].gateway,
+        Some("192.168.0.1".to_string())
+    );
 }
 
 #[test]
@@ -183,7 +216,10 @@ fn merges_linux_ip_route_default_gateway() {
         "default via 172.17.0.1 dev eth0 proto static",
     );
 
-    assert_eq!(interfaces[0].ipv4[0].gateway, Some("172.17.0.1".to_string()));
+    assert_eq!(
+        interfaces[0].ipv4[0].gateway,
+        Some("172.17.0.1".to_string())
+    );
 }
 
 #[test]
@@ -222,6 +258,37 @@ udp4       0      0  *.5353                 *.*
 }
 
 #[test]
+fn parses_linux_netstat_an_connections() {
+    let input = "\
+Active Internet connections (servers and established)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State
+tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN
+tcp6       0      0 :::8080                 :::*                    LISTEN
+udp        0      0 127.0.0.53:53           0.0.0.0:*
+";
+
+    let connections = lazyifconfig::collector::connections::parse_connections(input);
+
+    assert_eq!(connections.len(), 3);
+    assert_eq!(connections[0].proto, "tcp");
+    assert_eq!(connections[0].local_ip, "0.0.0.0");
+    assert_eq!(connections[0].local_port, "22");
+    assert_eq!(connections[0].foreign_ip, "0.0.0.0");
+    assert_eq!(connections[0].foreign_port, "*");
+    assert_eq!(connections[0].state.as_deref(), Some("LISTEN"));
+
+    assert_eq!(connections[1].proto, "tcp6");
+    assert_eq!(connections[1].local_ip, "::");
+    assert_eq!(connections[1].local_port, "8080");
+    assert_eq!(connections[1].foreign_ip, "::");
+    assert_eq!(connections[1].foreign_port, "*");
+
+    assert_eq!(connections[2].proto, "udp");
+    assert_eq!(connections[2].local_ip, "127.0.0.53");
+    assert_eq!(connections[2].local_port, "53");
+}
+
+#[test]
 fn test_merge_stats_from_netstat_ib() {
     let netstat_input = "\
 Name       Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll
@@ -249,4 +316,31 @@ gif0*      1280  <Link#2>                             0     0          0        
     assert_eq!(stats.rx_bytes, 9178588284);
     assert_eq!(stats.tx_packets, 9544740);
     assert_eq!(stats.tx_bytes, 4905232533);
+}
+
+#[test]
+fn merges_stats_from_linux_ip_details_output() {
+    let input = "\
+2: eth0@if3: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default
+    link/ether 02:42:ac:11:00:02 brd ff:ff:ff:ff:ff:ff link-netnsid 0
+    inet 172.17.0.2/16 brd 172.17.255.255 scope global eth0
+       valid_lft forever preferred_lft forever
+    RX:  bytes packets errors dropped  missed   mcast
+       9178588284 11885040 0 0 0 0
+    TX:  bytes packets errors dropped carrier collsns
+       4905232533 9544740 0 0 0 0
+";
+    let interfaces = parse_interfaces(input);
+    let merged = merge_stats(input, interfaces);
+    let eth0 = merged.iter().find(|item| item.name == "eth0").unwrap();
+
+    assert_eq!(
+        eth0.stats.as_ref(),
+        Some(&lazyifconfig::model::InterfaceStats {
+            rx_packets: 11885040,
+            rx_bytes: 9178588284,
+            tx_packets: 9544740,
+            tx_bytes: 4905232533,
+        })
+    );
 }
