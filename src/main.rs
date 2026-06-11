@@ -740,7 +740,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
-                    KeyCode::Char('f') | KeyCode::Char('ㄹ') => {
+                    KeyCode::Char('/') => {
                         app.help_visible = false;
                         if app.view_mode == ViewMode::Ports {
                             app.port_filter_active = true;

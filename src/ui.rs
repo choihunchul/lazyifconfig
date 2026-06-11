@@ -115,7 +115,7 @@ fn get_status_text(app: &App) -> String {
                 " filter: type | Enter apply | Esc clear | Backspace delete ".to_string()
             } else {
                 format!(
-                    " q | r | f filter | s sort | S dir | K kill | sort:{} | [/] | i/n/c/e/g ",
+                    " q | r | / filter | s sort | S dir | K kill | sort:{} | [/] | i/n/c/e/g ",
                     port_sort_label(app)
                 )
             }
@@ -822,7 +822,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         let filter_text = if app.port_filter_active {
             format!(" 🔍 Filter: {}▌", app.port_filter)
         } else {
-            format!(" 🔍 Filter: {}  (f: edit, Esc: clear)", app.port_filter)
+            format!(" 🔍 Filter: {}  (/: edit, Esc: clear)", app.port_filter)
         };
         let filter_style = if app.port_filter_active {
             Style::default().bg(Color::DarkGray).fg(Color::Yellow)
@@ -837,7 +837,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let status_idx = 6;
     let status_text = get_status_text(app);
     let status_p = Paragraph::new(status_text)
-        .style(Style::default().bg(Color::Blue).fg(Color::White));
+        .style(Style::default().bg(Color::Black).fg(Color::LightYellow).add_modifier(Modifier::BOLD));
     frame.render_widget(status_p, chunks[status_idx]);
 
     if app.help_visible {
@@ -1503,6 +1503,21 @@ mod tests {
 
         assert!(rendered.contains("o[output]"));
         assert!(rendered.contains("?[help]"));
+    }
+
+    #[test]
+    fn test_bottom_status_bar_uses_high_contrast_style() {
+        let app = App::default();
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let cell = buffer.get(1, 23);
+
+        assert_eq!(cell.bg, Color::Black);
+        assert_eq!(cell.fg, Color::LightYellow);
+        assert!(cell.modifier.contains(Modifier::BOLD));
     }
 
     #[test]
