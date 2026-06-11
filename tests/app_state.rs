@@ -134,7 +134,7 @@ fn tools_view_is_in_tab_cycle_between_routes_and_timeline() {
 }
 
 #[test]
-fn tools_state_selects_planned_registry_entries_without_running_them() {
+fn tools_state_selects_follow_up_registry_entries_and_keeps_them_runnable() {
     let mut app = App::default();
     app.set_view_mode(lazyifconfig::app::ViewMode::Tools);
 
@@ -147,7 +147,7 @@ fn tools_state_selects_planned_registry_entries_without_running_them() {
         app.tools.selected_tool_id(),
         lazyifconfig::tools::ToolId::WhoisLookup
     );
-    assert!(!app.tools.selected_tool_is_runnable());
+    assert!(app.tools.selected_tool_is_runnable());
 }
 
 #[test]

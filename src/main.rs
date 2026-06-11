@@ -651,8 +651,38 @@ fn start_selected_tool(app: &mut App) {
     });
 }
 
+async fn run_tools_cli_command(args: &[String]) -> Result<String, String> {
+    if args.is_empty() || args[0] == "-h" || args[0] == "--help" {
+        return Ok(lazyifconfig::tools::tools_cli_usage());
+    }
+
+    let tool_name = &args[0];
+    let tool_id = lazyifconfig::tools::tool_id_from_cli_name(tool_name)
+        .ok_or_else(|| format!("Unknown tool: {tool_name}"))?;
+    let tool_args = args[1..].iter().map(String::as_str).collect::<Vec<_>>();
+    let input = lazyifconfig::tools::tool_input_from_cli_args(tool_id, &tool_args)?;
+    let result = lazyifconfig::tools::run_tool(tool_id, input).await?;
+    Ok(lazyifconfig::tools::format_tool_result_plaintext(&result))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cli_args = std::env::args().skip(1).collect::<Vec<_>>();
+    if cli_args.first().map(String::as_str) == Some("tools") {
+        match run_tools_cli_command(&cli_args[1..]).await {
+            Ok(output) => {
+                println!("{output}");
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                eprintln!();
+                eprintln!("{}", lazyifconfig::tools::tools_cli_usage());
+                std::process::exit(2);
+            }
+        }
+    }
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;

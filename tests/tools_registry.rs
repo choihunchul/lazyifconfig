@@ -20,7 +20,7 @@ fn registry_lists_first_slice_tools_in_ui_order() {
 }
 
 #[test]
-fn registry_marks_only_first_slice_tools_runnable() {
+fn registry_marks_all_tools_runnable() {
     let registry = ToolRegistry::default();
 
     assert_eq!(
@@ -36,31 +36,19 @@ fn registry_marks_only_first_slice_tools_runnable() {
         ToolAvailability::Runnable
     );
     assert_eq!(
-        registry
-            .definition(ToolId::WhoisLookup)
-            .unwrap()
-            .availability,
-        ToolAvailability::Planned
+        registry.definition(ToolId::WhoisLookup).unwrap().availability,
+        ToolAvailability::Runnable
     );
     assert_eq!(
-        registry
-            .definition(ToolId::IpInformation)
-            .unwrap()
-            .availability,
-        ToolAvailability::Planned
+        registry.definition(ToolId::IpInformation).unwrap().availability,
+        ToolAvailability::Runnable
     );
     assert_eq!(
-        registry
-            .definition(ToolId::TlsInspector)
-            .unwrap()
-            .availability,
-        ToolAvailability::Planned
+        registry.definition(ToolId::TlsInspector).unwrap().availability,
+        ToolAvailability::Runnable
     );
     assert_eq!(
-        registry
-            .definition(ToolId::Traceroute)
-            .unwrap()
-            .availability,
-        ToolAvailability::Planned
+        registry.definition(ToolId::Traceroute).unwrap().availability,
+        ToolAvailability::Runnable
     );
 }

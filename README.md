@@ -24,6 +24,7 @@ It combines local interface, route, connection, port, and public IP data into a 
 - Port and connection detail tabs with focused summaries, process/WHOIS drilldowns, and shared keyboard navigation
 - Route Inspector with default route summary, destination path lookup, VPN route detection, diagnostics, raw route output, and a sortable/filterable route table
 - Tools input modal with muted placeholders, focused-field highlighting, and empty-input warnings
+- On-demand Tools Hub commands for DNS, Whois, IP info, port check, TLS, ping, and traceroute
 - Event timeline for interface and public IP changes
 - Raw command output capture inside the app
 - Background GitHub Release check with self-update support
@@ -74,6 +75,18 @@ cargo build --release
 
 ```bash
 cargo run --release
+```
+
+Run a tool directly from the CLI:
+
+```bash
+cargo run --release -- tools dns example.com
+cargo run --release -- tools whois github.com
+cargo run --release -- tools ip-info 8.8.8.8
+cargo run --release -- tools port-check github.com 443
+cargo run --release -- tools tls github.com:443
+cargo run --release -- tools ping 8.8.8.8
+cargo run --release -- tools traceroute 8.8.8.8
 ```
 
 ## Controls
