@@ -188,7 +188,7 @@ fn get_status_text(app: &App) -> String {
                 " filter: type | Enter apply | Esc clear | Backspace delete ".to_string()
             } else {
                 format!(
-                    " q | / filter | s sort | S dir | Tab section | c copy | w whois | sort:{} | [/] ",
+                    " q | / filter | s sort | S dir | Tab | c copy | w whois | {} | [/] ",
                     connection_sort_label(app)
                 )
             }
@@ -198,7 +198,7 @@ fn get_status_text(app: &App) -> String {
                 " filter: type | Enter apply | Esc clear | Backspace delete ".to_string()
             } else {
                 format!(
-                    " q | r | / filter | s sort | S dir | Tab section | K kill | sort:{} | [/] | i/n/c/e/g ",
+                    " q | r | / filter | s sort | S dir | Tab | K kill | {} | [/] | i/n/c/e/g ",
                     port_sort_label(app)
                 )
             }
@@ -354,7 +354,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     let top_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .constraints(match app.view_mode {
+            ViewMode::Routes => [Constraint::Percentage(70), Constraint::Percentage(30)],
+            _ => [Constraint::Percentage(40), Constraint::Percentage(60)],
+        })
         .split(top_chunks_area(chunks[2]));
 
     // Helper to extract size safely (compatible with older/newer ratatui area/size)
@@ -3097,7 +3100,7 @@ mod tests {
 
     #[test]
     fn test_route_detail_tabs_show_all_sections() {
-        let mut app = route_test_app(RouteInspectorSection::Summary);
+        let app = route_test_app(RouteInspectorSection::Summary);
 
         let tabs = route_inspector_section_tabs(&app);
         let mut text = String::new();
@@ -3109,11 +3112,12 @@ mod tests {
         assert!(text.contains("Path"));
         assert!(text.contains("VPN"));
         assert!(text.contains("Diagnostics"));
+        assert!(text.contains("1:Summary"));
 
         let summary_tab = tabs
             .spans
             .iter()
-            .find(|span| span.content == " Summary ");
+            .find(|span| span.content == " 1:Summary ");
         assert!(summary_tab.is_some());
     }
 
