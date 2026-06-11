@@ -58,10 +58,10 @@ jobs:
     needs: resolve-release
     uses: choihunchul/github--actions/.github/workflows/publish-homebrew-formula.yml@main
     with:
-      source_repository: ${{ github.repository }}
-      tap_repository: choihunchul/homebrew-tap
-      formula_name: lazyifconfig
+      source-repo: ${{ github.repository }}
+      tap-repo: choihunchul/homebrew-tap
+      formula-name: lazyifconfig
       tag: ${{ needs.resolve-release.outputs.tag }}
-      verify_tag: false
+      verify-tag: false
     secrets:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
