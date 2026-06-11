@@ -440,6 +440,7 @@ mod tests {
         assert_eq!(ip_rule_command_spec_for_os("macos"), None);
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn test_run_ifconfig_success() {
         let result = run_ifconfig(false);
@@ -461,6 +462,7 @@ mod tests {
         }
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn test_run_netstat_success() {
         let result = run_netstat();
@@ -475,6 +477,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn test_run_netstat_ib_success() {
         let result = run_netstat_ib();
