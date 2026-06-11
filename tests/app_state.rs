@@ -199,7 +199,9 @@ fn tools_validation_flags_invalid_port_and_target_formats() {
     app.tools.push_input_text("70000");
 
     let errors = app.tools.selected_input_validation_errors();
-    assert!(errors.iter().any(|line| line.contains("Port must be a number from 1 to 65535.")));
+    assert!(errors
+        .iter()
+        .any(|line| line.contains("Port must be a number from 1 to 65535.")));
 
     app.tools.select_next_tool();
     app.tools.open_input_modal();
@@ -468,8 +470,10 @@ fn replace_snapshot_emits_disappearance_event() {
 
 #[test]
 fn replace_snapshot_emits_status_change_event() {
-    let mut app = App::default();
-    app.show_all = true;
+    let mut app = App {
+        show_all: true,
+        ..Default::default()
+    };
 
     app.replace_snapshot(snapshot_with_interfaces(
         10,
@@ -805,7 +809,7 @@ fn test_traffic_history_bounding_and_cleanup() {
         routes: vec![],
         captured_at_secs: 100,
     });
-    assert!(app.traffic_history.get("en0").is_none());
+    assert!(!app.traffic_history.contains_key("en0"));
 }
 
 #[test]

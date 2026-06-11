@@ -518,10 +518,12 @@ fn parse_cname_record(line: &str, result: &mut DnsParseResult) {
 
 fn parse_mx_record(line: &str, result: &mut DnsParseResult) {
     let lower = line.to_lowercase();
-    if !lower.contains(" mx ") && !lower.ends_with(" mx") && !lower.ends_with(" mx.") {
-        if !lower.contains(" has mx") {
-            return;
-        }
+    if !lower.contains(" mx ")
+        && !lower.ends_with(" mx")
+        && !lower.ends_with(" mx.")
+        && !lower.contains(" has mx")
+    {
+        return;
     }
 
     let trimmed = line.trim();
@@ -608,12 +610,8 @@ fn parse_dig_record(line: &str, record_type: &str) -> Option<DnsRecord> {
 
 fn parse_host_record(line: &str, record_type: &str) -> Option<DnsRecord> {
     let lower = line.to_lowercase();
-    let mut should_parse = false;
-    if lower.contains(" has address ") && record_type == "A" {
-        should_parse = true;
-    } else if lower.contains(" has ipv6 address ") && record_type == "AAAA" {
-        should_parse = true;
-    }
+    let should_parse = (lower.contains(" has address ") && record_type == "A")
+        || (lower.contains(" has ipv6 address ") && record_type == "AAAA");
     if !should_parse {
         return None;
     }
@@ -621,7 +619,7 @@ fn parse_host_record(line: &str, record_type: &str) -> Option<DnsRecord> {
     let tokens = line.split_whitespace().collect::<Vec<_>>();
     let value = tokens
         .last()
-        .map(|value| trim_trailing_dot(*value))
+        .map(|value| trim_trailing_dot(value))
         .and_then(|value| parse_clean_ip(&value))?;
     let host = tokens
         .first()
@@ -635,10 +633,9 @@ fn parse_host_record(line: &str, record_type: &str) -> Option<DnsRecord> {
 }
 
 fn parse_record_by_type_cname(line: &str) -> Option<(String, String)> {
-    if !line.to_lowercase().contains(" cname ") {
-        if !line.to_lowercase().contains(" is an alias for ") {
-            return None;
-        }
+    let lower = line.to_lowercase();
+    if !lower.contains(" cname ") && !lower.contains(" is an alias for ") {
+        return None;
     }
 
     let trimmed = line.trim();
@@ -676,8 +673,7 @@ fn parse_record_by_type_cname(line: &str) -> Option<(String, String)> {
 }
 
 fn parse_ip_token(line: &str) -> Option<String> {
-    line.split_whitespace()
-        .find_map(|token| parse_clean_ip(token))
+    line.split_whitespace().find_map(parse_clean_ip)
 }
 
 fn parse_clean_ip(candidate: &str) -> Option<String> {

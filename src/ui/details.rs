@@ -29,20 +29,23 @@ pub(super) fn calculate_ipv6_subnet_arr(
 ) -> std::net::Ipv6Addr {
     let octets = ip.octets();
     let mut mask_octets = [0u8; 16];
-    for i in 0..16 {
+    for (i, mask_octet) in mask_octets.iter_mut().enumerate() {
         let bit_index = (i as u8) * 8;
         if prefix_len >= bit_index + 8 {
-            mask_octets[i] = 0xff;
+            *mask_octet = 0xff;
         } else if prefix_len <= bit_index {
-            mask_octets[i] = 0x00;
+            *mask_octet = 0x00;
         } else {
             let remaining = prefix_len - bit_index;
-            mask_octets[i] = 0xff_u8.checked_shl((8 - remaining) as u32).unwrap_or(0);
+            *mask_octet = 0xff_u8.checked_shl((8 - remaining) as u32).unwrap_or(0);
         }
     }
     let mut subnet_octets = [0u8; 16];
-    for i in 0..16 {
-        subnet_octets[i] = octets[i] & mask_octets[i];
+    for (subnet_octet, (octet, mask_octet)) in subnet_octets
+        .iter_mut()
+        .zip(octets.iter().zip(mask_octets.iter()))
+    {
+        *subnet_octet = octet & mask_octet;
     }
     std::net::Ipv6Addr::from(subnet_octets)
 }

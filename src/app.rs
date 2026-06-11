@@ -12,6 +12,9 @@ use crate::tools::{
 };
 use crate::update::{AvailableUpdate, UpdateMessage, UpdateStatus};
 
+type PendingToolResults =
+    std::sync::Arc<std::sync::Mutex<Vec<(ToolId, Result<ToolResult, String>)>>>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PortDetailsSection {
     Summary,
@@ -319,8 +322,7 @@ pub struct App {
     pub release_notes_viewer: ReleaseNotesViewerState,
     pub process_metrics: Option<ProcessMetrics>,
     pub tools: ToolsState,
-    pub pending_tool_results:
-        std::sync::Arc<std::sync::Mutex<Vec<(ToolId, Result<ToolResult, String>)>>>,
+    pub pending_tool_results: PendingToolResults,
     pub route_inspector: RouteInspectorState,
     pub port_details_section: PortDetailsSection,
     pub connection_details_section: ConnectionDetailsSection,
@@ -458,10 +460,16 @@ impl App {
                         if let (Some(curr_stats), Some(prev_stats)) =
                             (&interface.stats, &prev_if.stats)
                         {
-                            let rx_rate =
-                                curr_stats.rx_bytes.saturating_sub(prev_stats.rx_bytes) / elapsed;
-                            let tx_rate =
-                                curr_stats.tx_bytes.saturating_sub(prev_stats.tx_bytes) / elapsed;
+                            let rx_rate = curr_stats
+                                .rx_bytes
+                                .saturating_sub(prev_stats.rx_bytes)
+                                .checked_div(elapsed)
+                                .unwrap_or(0);
+                            let tx_rate = curr_stats
+                                .tx_bytes
+                                .saturating_sub(prev_stats.tx_bytes)
+                                .checked_div(elapsed)
+                                .unwrap_or(0);
 
                             let history = self
                                 .traffic_history
@@ -1539,27 +1547,28 @@ fn calculate_ipv4_subnet(ip: &Ipv4Addr, prefix_len: u8) -> Ipv4Addr {
 fn calculate_ipv6_subnet(ip: &Ipv6Addr, prefix_len: u8) -> Ipv6Addr {
     let octets = ip.octets();
     let mut mask_octets = [0u8; 16];
-    for i in 0..16 {
+    for (i, mask_octet) in mask_octets.iter_mut().enumerate() {
         let bit_index = (i as u8) * 8;
         if prefix_len >= bit_index + 8 {
-            mask_octets[i] = 0xff;
+            *mask_octet = 0xff;
         } else if prefix_len <= bit_index {
-            mask_octets[i] = 0x00;
+            *mask_octet = 0x00;
         } else {
             let remaining = prefix_len - bit_index;
-            mask_octets[i] = 0xff_u8.checked_shl((8 - remaining) as u32).unwrap_or(0);
+            *mask_octet = 0xff_u8.checked_shl((8 - remaining) as u32).unwrap_or(0);
         }
     }
     let mut subnet_octets = [0u8; 16];
-    for i in 0..16 {
-        subnet_octets[i] = octets[i] & mask_octets[i];
+    for (subnet_octet, (octet, mask_octet)) in subnet_octets
+        .iter_mut()
+        .zip(octets.iter().zip(mask_octets.iter()))
+    {
+        *subnet_octet = octet & mask_octet;
     }
     Ipv6Addr::from(subnet_octets)
 }
 
-fn interfaces_by_name<'a>(
-    interfaces: &'a [NetworkInterface],
-) -> HashMap<&'a str, &'a NetworkInterface> {
+fn interfaces_by_name(interfaces: &[NetworkInterface]) -> HashMap<&str, &NetworkInterface> {
     interfaces
         .iter()
         .map(|interface| (interface.name.as_str(), interface))

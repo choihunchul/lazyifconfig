@@ -98,13 +98,11 @@ pub async fn run(input: ToolInput) -> Result<ToolResult, String> {
             }
         }
     };
-    if !whois_stdout.is_empty() || !whois_stderr.is_empty() {
-        if rdap_value.is_none() {
-            raw_chunks.push(format!(
-                "$ {}\n{}{}",
-                whois_spec.display, whois_stdout, whois_stderr
-            ));
-        }
+    if (!whois_stdout.is_empty() || !whois_stderr.is_empty()) && rdap_value.is_none() {
+        raw_chunks.push(format!(
+            "$ {}\n{}{}",
+            whois_spec.display, whois_stdout, whois_stderr
+        ));
     }
 
     let combined = if whois_stdout.is_empty() {

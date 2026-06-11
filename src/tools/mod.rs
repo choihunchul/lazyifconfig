@@ -289,10 +289,9 @@ pub fn tools_cli_usage() -> String {
 
 pub fn validate_tool_input(id: ToolId, input: &ToolInput) -> Vec<String> {
     match id {
-        ToolId::DnsLookup
-        | ToolId::WhoisLookup
-        | ToolId::Ping
-        | ToolId::Traceroute => validate_required_fields(input, &["target"]),
+        ToolId::DnsLookup | ToolId::WhoisLookup | ToolId::Ping | ToolId::Traceroute => {
+            validate_required_fields(input, &["target"])
+        }
         ToolId::IpInformation => {
             let mut errors = validate_required_fields(input, &["ip"]);
             let ip = input.get("ip").unwrap_or("").trim();
@@ -324,7 +323,8 @@ fn validate_required_fields(input: &ToolInput, fields: &[&str]) -> Vec<String> {
     fields
         .iter()
         .filter_map(|field| {
-            input.get(field)
+            input
+                .get(field)
                 .map(str::trim)
                 .filter(|value| value.is_empty())
                 .or_else(|| input.get(field).is_none().then_some(""))

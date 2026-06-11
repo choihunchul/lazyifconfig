@@ -178,10 +178,10 @@ pub(super) fn render_tools_view(frame: &mut Frame, app: &App, list_area: Rect, d
             .add_modifier(Modifier::BOLD);
         let output_style = Style::default().fg(Color::Rgb(192, 255, 192));
         if !first.is_empty() {
-            if first.starts_with("$ ") {
+            if let Some(stripped) = first.strip_prefix("$ ") {
                 lines.push(Line::from(vec![
                     Span::styled("$ ", command_style),
-                    Span::styled(&first[2..], command_style),
+                    Span::styled(stripped, command_style),
                 ]));
             } else {
                 lines.push(Line::styled(first, output_style));

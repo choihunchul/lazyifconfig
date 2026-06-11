@@ -612,7 +612,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                             network,
                             prefix_len,
                         } => {
-                            details_text.push_str(&format!("Protocol:       IPv4\n"));
+                            details_text.push_str("Protocol:       IPv4\n");
                             details_text.push_str(&format!("Network Addr:   {}\n", network));
                             details_text.push_str(&format!("Prefix Length:  {}\n", prefix_len));
                             details_text.push_str(&format!(
@@ -624,7 +624,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                             network,
                             prefix_len,
                         } => {
-                            details_text.push_str(&format!("Protocol:       IPv6\n"));
+                            details_text.push_str("Protocol:       IPv6\n");
                             details_text.push_str(&format!("Network Addr:   {}\n", network));
                             details_text.push_str(&format!("Prefix Length:  {}\n", prefix_len));
                         }
@@ -1108,6 +1108,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use crate::app::App;
@@ -1806,7 +1807,7 @@ mod tests {
             }
         }
 
-        assert!(rendered.contains("Warning: fill in the highlighted inputs before running."));
+        assert!(rendered.contains("Warning: fix the input issues before running."));
 
         assert!(rendered.contains("443"));
     }

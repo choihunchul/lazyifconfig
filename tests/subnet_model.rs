@@ -17,7 +17,7 @@ fn test_subnet_sorting_order() {
     };
     let unassigned = Subnet::Unassigned;
 
-    let mut subnets = vec![
+    let mut subnets = [
         unassigned.clone(),
         ip6_1.clone(),
         ip4_2.clone(),

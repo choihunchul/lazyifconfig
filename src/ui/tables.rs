@@ -204,11 +204,7 @@ fn route_header_label(app: &App, column: RouteSortColumn, label: &str) -> String
 }
 
 fn visible_table_rows(area_height: u16) -> usize {
-    area_height
-        .saturating_sub(3)
-        .max(1)
-        .try_into()
-        .unwrap_or(usize::MAX)
+    area_height.saturating_sub(3).max(1).into()
 }
 
 fn visible_rows<T>(mut rows: Vec<T>, selected_index: usize, max_visible: usize) -> Vec<T> {

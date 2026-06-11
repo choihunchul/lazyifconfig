@@ -444,11 +444,9 @@ pub fn parse_default_gateways(netstat_output: &str) -> HashMap<String, String> {
                     if !gateway.contains(':') && !gateway.starts_with("link#") {
                         gateways.insert(format!("{}_v4", netif), gateway.to_string());
                     }
-                } else if parsing_ipv6 {
-                    if !gateway.starts_with("link#") {
-                        let clean_gateway = gateway.split('%').next().unwrap_or(gateway);
-                        gateways.insert(format!("{}_v6", netif), clean_gateway.to_string());
-                    }
+                } else if parsing_ipv6 && !gateway.starts_with("link#") {
+                    let clean_gateway = gateway.split('%').next().unwrap_or(gateway);
+                    gateways.insert(format!("{}_v6", netif), clean_gateway.to_string());
                 }
             }
         }
