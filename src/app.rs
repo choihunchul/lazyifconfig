@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
-use crate::model::{NetworkEvent, NetworkInterface, NetworkSnapshot, Subnet, PublicIpInfo, CommandSourceId, CommandOutput};
+use crate::model::{
+    CommandOutput, CommandSourceId, NetworkEvent, NetworkInterface, NetworkSnapshot, PublicIpInfo,
+    Subnet,
+};
 use crate::update::{AvailableUpdate, UpdateMessage, UpdateStatus};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,6 +23,14 @@ pub enum PortSortColumn {
     Command,
     Pid,
     User,
+    Proto,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnectionSortColumn {
+    Local,
+    Foreign,
+    State,
     Proto,
 }
 
@@ -96,13 +107,18 @@ pub struct App {
     pub port_filter_active: bool,
     pub port_sort_column: PortSortColumn,
     pub port_sort_direction: SortDirection,
+    pub connection_filter: String,
+    pub connection_filter_active: bool,
+    pub connection_sort_column: ConnectionSortColumn,
+    pub connection_sort_direction: SortDirection,
     pub public_ip_info: std::sync::Arc<std::sync::Mutex<Option<PublicIpInfo>>>,
     pub current_public_ip_info: Option<PublicIpInfo>,
     pub last_public_ip_fetch: Option<std::time::Instant>,
     pub command_outputs: HashMap<CommandSourceId, CommandOutput>,
     pub raw_viewer: RawViewerState,
     pub help_visible: bool,
-    pub async_command_outputs: std::sync::Arc<std::sync::Mutex<HashMap<CommandSourceId, CommandOutput>>>,
+    pub async_command_outputs:
+        std::sync::Arc<std::sync::Mutex<HashMap<CommandSourceId, CommandOutput>>>,
     pub update_status: UpdateStatus,
     pub pending_update: Option<AvailableUpdate>,
     pub last_update_check: Option<std::time::Instant>,
@@ -153,6 +169,10 @@ impl Default for App {
             port_filter_active: false,
             port_sort_column: PortSortColumn::Port,
             port_sort_direction: SortDirection::Ascending,
+            connection_filter: String::new(),
+            connection_filter_active: false,
+            connection_sort_column: ConnectionSortColumn::Local,
+            connection_sort_direction: SortDirection::Ascending,
             public_ip_info: std::sync::Arc::new(std::sync::Mutex::new(None)),
             current_public_ip_info: None,
             last_public_ip_fetch: None,
@@ -173,7 +193,9 @@ impl Default for App {
 impl App {
     pub fn replace_snapshot(&mut self, mut snapshot: NetworkSnapshot) {
         if !self.show_all {
-            snapshot.interfaces.retain(|interface| interface.status == crate::model::InterfaceStatus::Up);
+            snapshot
+                .interfaces
+                .retain(|interface| interface.status == crate::model::InterfaceStatus::Up);
         }
 
         let selected_name = self.selected_interface_name().map(str::to_owned);
@@ -184,16 +206,25 @@ impl App {
 
         // Update traffic history
         if let (Some(previous), Some(current)) = (&self.previous_snapshot, &self.current_snapshot) {
-            let elapsed = current.captured_at_secs.saturating_sub(previous.captured_at_secs);
+            let elapsed = current
+                .captured_at_secs
+                .saturating_sub(previous.captured_at_secs);
             if elapsed > 0 {
                 let previous_by_name = interfaces_by_name(&previous.interfaces);
                 for interface in &current.interfaces {
                     if let Some(prev_if) = previous_by_name.get(interface.name.as_str()) {
-                        if let (Some(curr_stats), Some(prev_stats)) = (&interface.stats, &prev_if.stats) {
-                            let rx_rate = curr_stats.rx_bytes.saturating_sub(prev_stats.rx_bytes) / elapsed;
-                            let tx_rate = curr_stats.tx_bytes.saturating_sub(prev_stats.tx_bytes) / elapsed;
+                        if let (Some(curr_stats), Some(prev_stats)) =
+                            (&interface.stats, &prev_if.stats)
+                        {
+                            let rx_rate =
+                                curr_stats.rx_bytes.saturating_sub(prev_stats.rx_bytes) / elapsed;
+                            let tx_rate =
+                                curr_stats.tx_bytes.saturating_sub(prev_stats.tx_bytes) / elapsed;
 
-                            let history = self.traffic_history.entry(interface.name.clone()).or_default();
+                            let history = self
+                                .traffic_history
+                                .entry(interface.name.clone())
+                                .or_default();
                             history.rx_rates.push(rx_rate);
                             history.tx_rates.push(tx_rate);
 
@@ -211,9 +242,8 @@ impl App {
 
         // Clean up history for removed interfaces
         if let Some(current) = &self.current_snapshot {
-            self.traffic_history.retain(|name, _| {
-                current.interfaces.iter().any(|i| i.name == *name)
-            });
+            self.traffic_history
+                .retain(|name, _| current.interfaces.iter().any(|i| i.name == *name));
         }
 
         self.push_generated_events();
@@ -239,6 +269,13 @@ impl App {
         }
     }
 
+    fn selected_connection_index(&self) -> Option<usize> {
+        match self.navigation_items.get(self.selected_index)? {
+            NavigationItem::Connection { index, .. } => Some(*index),
+            _ => None,
+        }
+    }
+
     pub fn set_view_mode(&mut self, mode: ViewMode) {
         if self.view_mode == mode {
             return;
@@ -248,6 +285,8 @@ impl App {
         self.details_scroll = 0;
         self.port_filter.clear();
         self.port_filter_active = false;
+        self.connection_filter.clear();
+        self.connection_filter_active = false;
         self.update_navigation_items();
         self.restore_selection(selected_name.as_deref());
     }
@@ -298,6 +337,29 @@ impl App {
         self.restore_selected_listening_port(selected_port_index);
     }
 
+    pub fn cycle_connection_sort_column(&mut self) {
+        let selected_connection_index = self.selected_connection_index();
+        self.connection_sort_column = match self.connection_sort_column {
+            ConnectionSortColumn::Local => ConnectionSortColumn::Foreign,
+            ConnectionSortColumn::Foreign => ConnectionSortColumn::State,
+            ConnectionSortColumn::State => ConnectionSortColumn::Proto,
+            ConnectionSortColumn::Proto => ConnectionSortColumn::Local,
+        };
+        self.connection_sort_direction = SortDirection::Ascending;
+        self.update_navigation_items();
+        self.restore_selected_connection(selected_connection_index);
+    }
+
+    pub fn toggle_connection_sort_direction(&mut self) {
+        let selected_connection_index = self.selected_connection_index();
+        self.connection_sort_direction = match self.connection_sort_direction {
+            SortDirection::Ascending => SortDirection::Descending,
+            SortDirection::Descending => SortDirection::Ascending,
+        };
+        self.update_navigation_items();
+        self.restore_selected_connection(selected_connection_index);
+    }
+
     fn restore_selected_listening_port(&mut self, selected_port_index: Option<usize>) {
         if let Some(selected_port_index) = selected_port_index {
             if let Some(index) = self.navigation_items.iter().position(|item| {
@@ -313,10 +375,25 @@ impl App {
         }
     }
 
+    fn restore_selected_connection(&mut self, selected_connection_index: Option<usize>) {
+        if let Some(selected_connection_index) = selected_connection_index {
+            if let Some(index) = self.navigation_items.iter().position(|item| {
+                matches!(item, NavigationItem::Connection { index, .. } if *index == selected_connection_index)
+            }) {
+                self.selected_index = index;
+                return;
+            }
+        }
+
+        if self.selected_index >= self.navigation_items.len() {
+            self.selected_index = self.navigation_items.len().saturating_sub(1);
+        }
+    }
+
     pub fn update_raw_viewer_search_matches(&mut self) {
         self.raw_viewer.search_matches.clear();
         self.raw_viewer.current_match_index = 0;
-        
+
         if self.raw_viewer.search_query.is_empty() {
             return;
         }
@@ -349,21 +426,35 @@ impl App {
     pub fn selected_rates(&self) -> Option<(u64, u64)> {
         let current = self.current_snapshot.as_ref()?;
         let previous = self.previous_snapshot.as_ref()?;
-        let elapsed = current.captured_at_secs.checked_sub(previous.captured_at_secs)?;
+        let elapsed = current
+            .captured_at_secs
+            .checked_sub(previous.captured_at_secs)?;
 
         if elapsed == 0 {
             return None;
         }
 
         let selected_name = self.selected_interface_name()?;
-        let current_interface = current.interfaces.iter().find(|i| i.name == selected_name)?;
-        let previous_interface = previous.interfaces.iter().find(|i| i.name == selected_name)?;
+        let current_interface = current
+            .interfaces
+            .iter()
+            .find(|i| i.name == selected_name)?;
+        let previous_interface = previous
+            .interfaces
+            .iter()
+            .find(|i| i.name == selected_name)?;
         let current_stats = current_interface.stats.as_ref()?;
         let previous_stats = previous_interface.stats.as_ref()?;
 
         Some((
-            current_stats.rx_bytes.saturating_sub(previous_stats.rx_bytes) / elapsed,
-            current_stats.tx_bytes.saturating_sub(previous_stats.tx_bytes) / elapsed,
+            current_stats
+                .rx_bytes
+                .saturating_sub(previous_stats.rx_bytes)
+                / elapsed,
+            current_stats
+                .tx_bytes
+                .saturating_sub(previous_stats.tx_bytes)
+                / elapsed,
         ))
     }
 
@@ -399,8 +490,12 @@ impl App {
                         if let Some(prefix) = addr.prefix_len {
                             if let Ok(ip) = addr.value.parse::<Ipv4Addr>() {
                                 let net_ip = calculate_ipv4_subnet(&ip, prefix);
-                                let subnet = Subnet::Ipv4 { network: net_ip, prefix_len: prefix };
-                                groups.entry(subnet)
+                                let subnet = Subnet::Ipv4 {
+                                    network: net_ip,
+                                    prefix_len: prefix,
+                                };
+                                groups
+                                    .entry(subnet)
                                     .or_default()
                                     .push((interface.name.clone(), Some(addr.value.clone())));
                                 assigned = true;
@@ -413,8 +508,12 @@ impl App {
                         if let Some(prefix) = addr.prefix_len {
                             if let Ok(ip) = addr.value.parse::<Ipv6Addr>() {
                                 let net_ip = calculate_ipv6_subnet(&ip, prefix);
-                                let subnet = Subnet::Ipv6 { network: net_ip, prefix_len: prefix };
-                                groups.entry(subnet)
+                                let subnet = Subnet::Ipv6 {
+                                    network: net_ip,
+                                    prefix_len: prefix,
+                                };
+                                groups
+                                    .entry(subnet)
                                     .or_default()
                                     .push((interface.name.clone(), Some(addr.value.clone())));
                                 assigned = true;
@@ -423,7 +522,8 @@ impl App {
                     }
 
                     if !assigned {
-                        groups.entry(Subnet::Unassigned)
+                        groups
+                            .entry(Subnet::Unassigned)
                             .or_default()
                             .push((interface.name.clone(), None));
                     }
@@ -447,18 +547,44 @@ impl App {
             }
             ViewMode::Connections => {
                 let snapshot = snapshot.unwrap();
-                self.navigation_items = snapshot
+                let query = self.connection_filter.to_lowercase();
+                let mut items: Vec<_> = snapshot
                     .connections
                     .iter()
                     .enumerate()
-                    .map(|(idx, c)| NavigationItem::Connection {
+                    .filter_map(|(idx, c)| {
+                        let local = format!("{}:{}", c.local_ip, c.local_port);
+                        let foreign = format!("{}:{}", c.foreign_ip, c.foreign_port);
+                        let matches_filter = query.is_empty()
+                            || c.proto.to_lowercase().contains(&query)
+                            || local.to_lowercase().contains(&query)
+                            || foreign.to_lowercase().contains(&query)
+                            || c.state
+                                .as_deref()
+                                .unwrap_or("")
+                                .to_lowercase()
+                                .contains(&query);
+
+                        if matches_filter {
+                            Some((idx, c, local, foreign))
+                        } else {
+                            None
+                        }
+                    })
+                    .map(|(idx, c, local, foreign)| NavigationItem::Connection {
                         proto: c.proto.clone(),
-                        local: format!("{}:{}", c.local_ip, c.local_port),
-                        foreign: format!("{}:{}", c.foreign_ip, c.foreign_port),
+                        local,
+                        foreign,
                         state: c.state.clone(),
                         index: idx,
                     })
                     .collect();
+                sort_connection_items(
+                    &mut items,
+                    self.connection_sort_column,
+                    self.connection_sort_direction,
+                );
+                self.navigation_items = items;
             }
             ViewMode::Ports => {
                 let snapshot = snapshot.unwrap();
@@ -583,26 +709,46 @@ impl App {
                         // Check status change
                         if previous_interface.status != interface.status {
                             let (kind, severity) = match interface.status {
-                                crate::model::InterfaceStatus::Up => {
-                                    match interface.network_kind {
-                                        crate::model::NetworkKind::Vpn => (NetworkEventKind::VpnConnected, EventSeverity::Info),
-                                        crate::model::NetworkKind::Container => (NetworkEventKind::ContainerNetworkAppeared, EventSeverity::Info),
-                                        _ => (NetworkEventKind::InterfaceUp, EventSeverity::Info),
+                                crate::model::InterfaceStatus::Up => match interface.network_kind {
+                                    crate::model::NetworkKind::Vpn => {
+                                        (NetworkEventKind::VpnConnected, EventSeverity::Info)
                                     }
-                                }
+                                    crate::model::NetworkKind::Container => (
+                                        NetworkEventKind::ContainerNetworkAppeared,
+                                        EventSeverity::Info,
+                                    ),
+                                    _ => (NetworkEventKind::InterfaceUp, EventSeverity::Info),
+                                },
                                 crate::model::InterfaceStatus::Down => {
                                     match interface.network_kind {
-                                        crate::model::NetworkKind::Vpn => (NetworkEventKind::VpnDisconnected, EventSeverity::Warning),
-                                        crate::model::NetworkKind::Container => (NetworkEventKind::ContainerNetworkRemoved, EventSeverity::Info),
-                                        _ => (NetworkEventKind::InterfaceDown, EventSeverity::Warning),
+                                        crate::model::NetworkKind::Vpn => (
+                                            NetworkEventKind::VpnDisconnected,
+                                            EventSeverity::Warning,
+                                        ),
+                                        crate::model::NetworkKind::Container => (
+                                            NetworkEventKind::ContainerNetworkRemoved,
+                                            EventSeverity::Info,
+                                        ),
+                                        _ => (
+                                            NetworkEventKind::InterfaceDown,
+                                            EventSeverity::Warning,
+                                        ),
                                     }
                                 }
                             };
                             let msg = match kind {
-                                NetworkEventKind::VpnConnected => format!("{} connected", interface.name),
-                                NetworkEventKind::VpnDisconnected => format!("{} disconnected", interface.name),
-                                NetworkEventKind::ContainerNetworkAppeared => format!("{} appeared", interface.name),
-                                NetworkEventKind::ContainerNetworkRemoved => format!("{} removed", interface.name),
+                                NetworkEventKind::VpnConnected => {
+                                    format!("{} connected", interface.name)
+                                }
+                                NetworkEventKind::VpnDisconnected => {
+                                    format!("{} disconnected", interface.name)
+                                }
+                                NetworkEventKind::ContainerNetworkAppeared => {
+                                    format!("{} appeared", interface.name)
+                                }
+                                NetworkEventKind::ContainerNetworkRemoved => {
+                                    format!("{} removed", interface.name)
+                                }
                                 _ => format!(
                                     "{} status changed: {} -> {}",
                                     interface.name,
@@ -614,8 +760,13 @@ impl App {
                         }
 
                         // IPv4 Address changes
-                        let prev_v4: Vec<String> = previous_interface.ipv4.iter().map(|a| a.value.clone()).collect();
-                        let curr_v4: Vec<String> = interface.ipv4.iter().map(|a| a.value.clone()).collect();
+                        let prev_v4: Vec<String> = previous_interface
+                            .ipv4
+                            .iter()
+                            .map(|a| a.value.clone())
+                            .collect();
+                        let curr_v4: Vec<String> =
+                            interface.ipv4.iter().map(|a| a.value.clone()).collect();
                         if prev_v4.len() == 1 && curr_v4.len() == 1 && prev_v4[0] != curr_v4[0] {
                             new_events.push(NetworkEvent::new(
                                 NetworkEventKind::Ipv4Changed,
@@ -644,8 +795,13 @@ impl App {
                         }
 
                         // IPv6 Address changes
-                        let prev_v6: Vec<String> = previous_interface.ipv6.iter().map(|a| a.value.clone()).collect();
-                        let curr_v6: Vec<String> = interface.ipv6.iter().map(|a| a.value.clone()).collect();
+                        let prev_v6: Vec<String> = previous_interface
+                            .ipv6
+                            .iter()
+                            .map(|a| a.value.clone())
+                            .collect();
+                        let curr_v6: Vec<String> =
+                            interface.ipv6.iter().map(|a| a.value.clone()).collect();
                         if prev_v6.len() == 1 && curr_v6.len() == 1 && prev_v6[0] != curr_v6[0] {
                             new_events.push(NetworkEvent::new(
                                 NetworkEventKind::Ipv6Changed,
@@ -714,29 +870,31 @@ impl App {
         }
     }
 
-      fn restore_selection(&mut self, selected_name: Option<&str>) {
-          let len = self.navigation_items.len();
-          if len == 0 {
-              self.selected_index = 0;
-              return;
-          }
+    fn restore_selection(&mut self, selected_name: Option<&str>) {
+        let len = self.navigation_items.len();
+        if len == 0 {
+            self.selected_index = 0;
+            return;
+        }
 
-          if let Some(name) = selected_name {
-              if let Some(index) = self.navigation_items.iter().position(|item| match item {
-                  NavigationItem::Interface { name: item_name, .. } => item_name == name,
-                  _ => false,
-              }) {
-                  self.selected_index = index;
-                  return;
-              }
-          }
+        if let Some(name) = selected_name {
+            if let Some(index) = self.navigation_items.iter().position(|item| match item {
+                NavigationItem::Interface {
+                    name: item_name, ..
+                } => item_name == name,
+                _ => false,
+            }) {
+                self.selected_index = index;
+                return;
+            }
+        }
 
-          if self.selected_index >= len {
-              self.selected_index = len - 1;
-          }
-      }
+        if self.selected_index >= len {
+            self.selected_index = len - 1;
+        }
+    }
 
-      pub fn select_next(&mut self) {
+    pub fn select_next(&mut self) {
         let len = self.navigation_items.len();
         if len > 0 {
             self.selected_index = (self.selected_index + 1) % len;
@@ -833,6 +991,61 @@ fn compare_listening_port_items(
         .then_with(|| compare_numeric_text(pid_a, pid_b))
 }
 
+fn sort_connection_items(
+    items: &mut [NavigationItem],
+    column: ConnectionSortColumn,
+    direction: SortDirection,
+) {
+    items.sort_by(|a, b| {
+        let ordering = compare_connection_items(a, b, column);
+        match direction {
+            SortDirection::Ascending => ordering,
+            SortDirection::Descending => ordering.reverse(),
+        }
+    });
+}
+
+fn compare_connection_items(
+    a: &NavigationItem,
+    b: &NavigationItem,
+    column: ConnectionSortColumn,
+) -> std::cmp::Ordering {
+    let (
+        NavigationItem::Connection {
+            proto: proto_a,
+            local: local_a,
+            foreign: foreign_a,
+            state: state_a,
+            ..
+        },
+        NavigationItem::Connection {
+            proto: proto_b,
+            local: local_b,
+            foreign: foreign_b,
+            state: state_b,
+            ..
+        },
+    ) = (a, b)
+    else {
+        return std::cmp::Ordering::Equal;
+    };
+
+    let state_a = state_a.as_deref().unwrap_or("");
+    let state_b = state_b.as_deref().unwrap_or("");
+    let primary = match column {
+        ConnectionSortColumn::Local => compare_text(local_a, local_b),
+        ConnectionSortColumn::Foreign => compare_text(foreign_a, foreign_b),
+        ConnectionSortColumn::State => compare_text(state_a, state_b),
+        ConnectionSortColumn::Proto => compare_text(proto_a, proto_b),
+    };
+
+    primary
+        .then_with(|| compare_text(local_a, local_b))
+        .then_with(|| compare_text(foreign_a, foreign_b))
+        .then_with(|| compare_text(state_a, state_b))
+        .then_with(|| compare_text(proto_a, proto_b))
+}
+
 fn compare_numeric_text(a: &str, b: &str) -> std::cmp::Ordering {
     match (a.parse::<u64>(), b.parse::<u64>()) {
         (Ok(a), Ok(b)) => a.cmp(&b),
@@ -844,52 +1057,51 @@ fn compare_text(a: &str, b: &str) -> std::cmp::Ordering {
     a.to_lowercase().cmp(&b.to_lowercase())
 }
 
-  fn calculate_ipv4_subnet(ip: &Ipv4Addr, prefix_len: u8) -> Ipv4Addr {
-      let ip_u32 = u32::from(*ip);
-      let mask = if prefix_len == 0 {
-          0
-      } else if prefix_len >= 32 {
-          u32::MAX
-      } else {
-          u32::MAX << (32 - prefix_len)
-      };
-      Ipv4Addr::from(ip_u32 & mask)
-  }
+fn calculate_ipv4_subnet(ip: &Ipv4Addr, prefix_len: u8) -> Ipv4Addr {
+    let ip_u32 = u32::from(*ip);
+    let mask = if prefix_len == 0 {
+        0
+    } else if prefix_len >= 32 {
+        u32::MAX
+    } else {
+        u32::MAX << (32 - prefix_len)
+    };
+    Ipv4Addr::from(ip_u32 & mask)
+}
 
-  fn calculate_ipv6_subnet(ip: &Ipv6Addr, prefix_len: u8) -> Ipv6Addr {
-      let octets = ip.octets();
-      let mut mask_octets = [0u8; 16];
-      for i in 0..16 {
-          let bit_index = (i as u8) * 8;
-          if prefix_len >= bit_index + 8 {
-              mask_octets[i] = 0xff;
-          } else if prefix_len <= bit_index {
-              mask_octets[i] = 0x00;
-          } else {
-              let remaining = prefix_len - bit_index;
-              mask_octets[i] = 0xff_u8.checked_shl((8 - remaining) as u32).unwrap_or(0);
-          }
-      }
-      let mut subnet_octets = [0u8; 16];
-      for i in 0..16 {
-          subnet_octets[i] = octets[i] & mask_octets[i];
-      }
-      Ipv6Addr::from(subnet_octets)
-  }
+fn calculate_ipv6_subnet(ip: &Ipv6Addr, prefix_len: u8) -> Ipv6Addr {
+    let octets = ip.octets();
+    let mut mask_octets = [0u8; 16];
+    for i in 0..16 {
+        let bit_index = (i as u8) * 8;
+        if prefix_len >= bit_index + 8 {
+            mask_octets[i] = 0xff;
+        } else if prefix_len <= bit_index {
+            mask_octets[i] = 0x00;
+        } else {
+            let remaining = prefix_len - bit_index;
+            mask_octets[i] = 0xff_u8.checked_shl((8 - remaining) as u32).unwrap_or(0);
+        }
+    }
+    let mut subnet_octets = [0u8; 16];
+    for i in 0..16 {
+        subnet_octets[i] = octets[i] & mask_octets[i];
+    }
+    Ipv6Addr::from(subnet_octets)
+}
 
-  fn interfaces_by_name<'a>(
-      interfaces: &'a [NetworkInterface],
-  ) -> HashMap<&'a str, &'a NetworkInterface> {
-      interfaces
-          .iter()
-          .map(|interface| (interface.name.as_str(), interface))
-          .collect()
-  }
+fn interfaces_by_name<'a>(
+    interfaces: &'a [NetworkInterface],
+) -> HashMap<&'a str, &'a NetworkInterface> {
+    interfaces
+        .iter()
+        .map(|interface| (interface.name.as_str(), interface))
+        .collect()
+}
 
-
-  fn status_label(status: &crate::model::InterfaceStatus) -> &'static str {
-      match status {
-          crate::model::InterfaceStatus::Up => "up",
-          crate::model::InterfaceStatus::Down => "down",
-      }
-  }
+fn status_label(status: &crate::model::InterfaceStatus) -> &'static str {
+    match status {
+        crate::model::InterfaceStatus::Up => "up",
+        crate::model::InterfaceStatus::Down => "down",
+    }
+}

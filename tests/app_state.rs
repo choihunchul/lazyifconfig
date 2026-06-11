@@ -1,7 +1,7 @@
 use lazyifconfig::app::App;
 use lazyifconfig::model::{
-    InterfaceAddress, InterfaceStats, InterfaceStatus, InterfaceType, NetworkEvent,
-    ListeningPort, NetworkInterface, NetworkSnapshot,
+    ActiveConnection, InterfaceAddress, InterfaceStats, InterfaceStatus, InterfaceType,
+    ListeningPort, NetworkEvent, NetworkInterface, NetworkSnapshot,
 };
 
 #[test]
@@ -74,11 +74,19 @@ fn selected_rates_are_computed_from_consecutive_snapshots() {
 
     app.replace_snapshot(snapshot_with_interfaces(
         10,
-        vec![interface_with_stats("en0", Some("192.168.0.10"), Some((1_000, 400)))],
+        vec![interface_with_stats(
+            "en0",
+            Some("192.168.0.10"),
+            Some((1_000, 400)),
+        )],
     ));
     app.replace_snapshot(snapshot_with_interfaces(
         15,
-        vec![interface_with_stats("en0", Some("192.168.0.10"), Some((1_600, 700)))],
+        vec![interface_with_stats(
+            "en0",
+            Some("192.168.0.10"),
+            Some((1_600, 700)),
+        )],
     ));
 
     assert_eq!(app.selected_rates(), Some((120, 60)));
@@ -144,8 +152,14 @@ fn ports_sort_column_cycles_and_direction_toggles() {
     ]));
 
     app.cycle_port_sort_column();
-    assert_eq!(app.port_sort_column, lazyifconfig::app::PortSortColumn::Command);
-    assert_eq!(app.port_sort_direction, lazyifconfig::app::SortDirection::Ascending);
+    assert_eq!(
+        app.port_sort_column,
+        lazyifconfig::app::PortSortColumn::Command
+    );
+    assert_eq!(
+        app.port_sort_direction,
+        lazyifconfig::app::SortDirection::Ascending
+    );
 
     app.update_navigation_items();
     let first_command = match &app.navigation_items[0] {
@@ -155,7 +169,10 @@ fn ports_sort_column_cycles_and_direction_toggles() {
     assert_eq!(first_command, "alpha");
 
     app.toggle_port_sort_direction();
-    assert_eq!(app.port_sort_direction, lazyifconfig::app::SortDirection::Descending);
+    assert_eq!(
+        app.port_sort_direction,
+        lazyifconfig::app::SortDirection::Descending
+    );
 
     app.update_navigation_items();
     let first_command = match &app.navigation_items[0] {
@@ -166,12 +183,108 @@ fn ports_sort_column_cycles_and_direction_toggles() {
 }
 
 #[test]
+fn connections_filter_then_sort_by_local_address() {
+    let mut app = App::default();
+    app.view_mode = lazyifconfig::app::ViewMode::Connections;
+    app.connection_filter = "est".to_string();
+
+    app.replace_snapshot(snapshot_with_connections(vec![
+        active_connection(
+            "tcp",
+            "127.0.0.1",
+            "9000",
+            "1.1.1.1",
+            "443",
+            Some("ESTABLISHED"),
+        ),
+        active_connection("udp", "127.0.0.1", "53", "*", "*", None),
+        active_connection(
+            "tcp",
+            "127.0.0.1",
+            "8080",
+            "8.8.8.8",
+            "443",
+            Some("ESTABLISHED"),
+        ),
+    ]));
+
+    let locals: Vec<String> = app
+        .navigation_items
+        .iter()
+        .map(|item| match item {
+            lazyifconfig::app::NavigationItem::Connection { local, .. } => local.clone(),
+            other => panic!("expected connection item, got {other:?}"),
+        })
+        .collect();
+
+    assert_eq!(locals, vec!["127.0.0.1:8080", "127.0.0.1:9000"]);
+}
+
+#[test]
+fn connections_sort_column_cycles_and_direction_toggles() {
+    let mut app = App::default();
+    app.view_mode = lazyifconfig::app::ViewMode::Connections;
+    app.replace_snapshot(snapshot_with_connections(vec![
+        active_connection(
+            "tcp",
+            "127.0.0.1",
+            "9000",
+            "9.9.9.9",
+            "443",
+            Some("ESTABLISHED"),
+        ),
+        active_connection(
+            "tcp",
+            "127.0.0.1",
+            "8080",
+            "1.1.1.1",
+            "443",
+            Some("CLOSE_WAIT"),
+        ),
+    ]));
+
+    app.cycle_connection_sort_column();
+    assert_eq!(
+        app.connection_sort_column,
+        lazyifconfig::app::ConnectionSortColumn::Foreign
+    );
+    assert_eq!(
+        app.connection_sort_direction,
+        lazyifconfig::app::SortDirection::Ascending
+    );
+
+    app.update_navigation_items();
+    let first_foreign = match &app.navigation_items[0] {
+        lazyifconfig::app::NavigationItem::Connection { foreign, .. } => foreign.as_str(),
+        other => panic!("expected connection item, got {other:?}"),
+    };
+    assert_eq!(first_foreign, "1.1.1.1:443");
+
+    app.toggle_connection_sort_direction();
+    assert_eq!(
+        app.connection_sort_direction,
+        lazyifconfig::app::SortDirection::Descending
+    );
+
+    app.update_navigation_items();
+    let first_foreign = match &app.navigation_items[0] {
+        lazyifconfig::app::NavigationItem::Connection { foreign, .. } => foreign.as_str(),
+        other => panic!("expected connection item, got {other:?}"),
+    };
+    assert_eq!(first_foreign, "9.9.9.9:443");
+}
+
+#[test]
 fn replace_snapshot_does_not_emit_events_for_first_snapshot() {
     let mut app = App::default();
 
     app.replace_snapshot(snapshot_with_interfaces(
         10,
-        vec![interface_with_stats("en0", Some("192.168.0.10"), Some((100, 50)))],
+        vec![interface_with_stats(
+            "en0",
+            Some("192.168.0.10"),
+            Some((100, 50)),
+        )],
     ));
 
     assert!(app.recent_events.is_empty());
@@ -184,14 +297,24 @@ fn replace_snapshot_emits_appearance_event() {
     app.replace_snapshot(snapshot_with_interfaces(10, vec![]));
     app.replace_snapshot(snapshot_with_interfaces(
         20,
-        vec![interface_with_stats("en0", Some("192.168.0.10"), Some((100, 50)))],
+        vec![interface_with_stats(
+            "en0",
+            Some("192.168.0.10"),
+            Some((100, 50)),
+        )],
     ));
 
     assert_eq!(app.recent_events.len(), 2);
     assert_eq!(app.recent_events[0].message, "en0 appeared");
-    assert_eq!(app.recent_events[0].kind, lazyifconfig::model::NetworkEventKind::InterfaceAppeared);
+    assert_eq!(
+        app.recent_events[0].kind,
+        lazyifconfig::model::NetworkEventKind::InterfaceAppeared
+    );
     assert_eq!(app.recent_events[1].message, "en0: added IPv4 192.168.0.10");
-    assert_eq!(app.recent_events[1].kind, lazyifconfig::model::NetworkEventKind::Ipv4Added);
+    assert_eq!(
+        app.recent_events[1].kind,
+        lazyifconfig::model::NetworkEventKind::Ipv4Added
+    );
 }
 
 #[test]
@@ -200,13 +323,20 @@ fn replace_snapshot_emits_disappearance_event() {
 
     app.replace_snapshot(snapshot_with_interfaces(
         10,
-        vec![interface_with_stats("en0", Some("192.168.0.10"), Some((100, 50)))],
+        vec![interface_with_stats(
+            "en0",
+            Some("192.168.0.10"),
+            Some((100, 50)),
+        )],
     ));
     app.replace_snapshot(snapshot_with_interfaces(20, vec![]));
 
     assert_eq!(app.recent_events.len(), 1);
     assert_eq!(app.recent_events[0].message, "en0 disappeared");
-    assert_eq!(app.recent_events[0].kind, lazyifconfig::model::NetworkEventKind::InterfaceRemoved);
+    assert_eq!(
+        app.recent_events[0].kind,
+        lazyifconfig::model::NetworkEventKind::InterfaceRemoved
+    );
 }
 
 #[test]
@@ -234,8 +364,14 @@ fn replace_snapshot_emits_status_change_event() {
     ));
 
     assert_eq!(app.recent_events.len(), 1);
-    assert_eq!(app.recent_events[0].message, "en0 status changed: up -> down");
-    assert_eq!(app.recent_events[0].kind, lazyifconfig::model::NetworkEventKind::InterfaceDown);
+    assert_eq!(
+        app.recent_events[0].message,
+        "en0 status changed: up -> down"
+    );
+    assert_eq!(
+        app.recent_events[0].kind,
+        lazyifconfig::model::NetworkEventKind::InterfaceDown
+    );
 }
 
 #[test]
@@ -244,11 +380,19 @@ fn replace_snapshot_emits_ipv4_change_event() {
 
     app.replace_snapshot(snapshot_with_interfaces(
         10,
-        vec![interface_with_stats("en0", Some("192.168.0.10"), Some((100, 50)))],
+        vec![interface_with_stats(
+            "en0",
+            Some("192.168.0.10"),
+            Some((100, 50)),
+        )],
     ));
     app.replace_snapshot(snapshot_with_interfaces(
         20,
-        vec![interface_with_stats("en0", Some("192.168.0.11"), Some((200, 150)))],
+        vec![interface_with_stats(
+            "en0",
+            Some("192.168.0.11"),
+            Some((200, 150)),
+        )],
     ));
 
     assert_eq!(app.recent_events.len(), 1);
@@ -256,7 +400,10 @@ fn replace_snapshot_emits_ipv4_change_event() {
         app.recent_events[0].message,
         "en0: 192.168.0.10 -> 192.168.0.11"
     );
-    assert_eq!(app.recent_events[0].kind, lazyifconfig::model::NetworkEventKind::Ipv4Changed);
+    assert_eq!(
+        app.recent_events[0].kind,
+        lazyifconfig::model::NetworkEventKind::Ipv4Changed
+    );
 }
 
 #[test]
@@ -265,7 +412,11 @@ fn replace_snapshot_keeps_only_most_recent_fifty_events() {
 
     app.replace_snapshot(snapshot_with_interfaces(
         0,
-        vec![interface_with_stats("en0", Some("192.168.0.0"), Some((0, 0)))],
+        vec![interface_with_stats(
+            "en0",
+            Some("192.168.0.0"),
+            Some((0, 0)),
+        )],
     ));
 
     for idx in 1..=110 {
@@ -281,7 +432,9 @@ fn replace_snapshot_keeps_only_most_recent_fifty_events() {
 
     assert_eq!(app.recent_events.len(), 100);
     assert_eq!(
-        app.recent_events.first().map(|event| event.message.as_str()),
+        app.recent_events
+            .first()
+            .map(|event| event.message.as_str()),
         Some("en0: 192.168.0.10 -> 192.168.0.11")
     );
     assert_eq!(
@@ -290,7 +443,10 @@ fn replace_snapshot_keeps_only_most_recent_fifty_events() {
     );
 }
 
-fn snapshot_with_interfaces(captured_at_secs: u64, interfaces: Vec<NetworkInterface>) -> NetworkSnapshot {
+fn snapshot_with_interfaces(
+    captured_at_secs: u64,
+    interfaces: Vec<NetworkInterface>,
+) -> NetworkSnapshot {
     NetworkSnapshot {
         interfaces,
         connections: vec![],
@@ -310,7 +466,41 @@ fn snapshot_with_ports(listening_ports: Vec<ListeningPort>) -> NetworkSnapshot {
     }
 }
 
-fn listening_port(proto: &str, local_port: &str, command: &str, pid: &str, user: &str) -> ListeningPort {
+fn snapshot_with_connections(connections: Vec<ActiveConnection>) -> NetworkSnapshot {
+    NetworkSnapshot {
+        interfaces: vec![],
+        connections,
+        listening_ports: vec![],
+        routes: vec![],
+        captured_at_secs: 10,
+    }
+}
+
+fn active_connection(
+    proto: &str,
+    local_ip: &str,
+    local_port: &str,
+    foreign_ip: &str,
+    foreign_port: &str,
+    state: Option<&str>,
+) -> ActiveConnection {
+    ActiveConnection {
+        proto: proto.to_string(),
+        local_ip: local_ip.to_string(),
+        local_port: local_port.to_string(),
+        foreign_ip: foreign_ip.to_string(),
+        foreign_port: foreign_port.to_string(),
+        state: state.map(str::to_string),
+    }
+}
+
+fn listening_port(
+    proto: &str,
+    local_port: &str,
+    command: &str,
+    pid: &str,
+    user: &str,
+) -> ListeningPort {
     ListeningPort {
         proto: proto.to_string(),
         local_ip: "0.0.0.0".to_string(),
@@ -432,8 +622,14 @@ fn test_app_network_view_grouping() {
     assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Network);
 
     // navigation_items 검증: SubnetHeader(127.0.0.0/8) -> lo0 -> SubnetHeader(192.168.0.0/24) -> en0
-    assert!(matches!(app.navigation_items[0], lazyifconfig::app::NavigationItem::SubnetHeader(_)));
-    assert!(matches!(app.navigation_items[1], lazyifconfig::app::NavigationItem::Interface { .. }));
+    assert!(matches!(
+        app.navigation_items[0],
+        lazyifconfig::app::NavigationItem::SubnetHeader(_)
+    ));
+    assert!(matches!(
+        app.navigation_items[1],
+        lazyifconfig::app::NavigationItem::Interface { .. }
+    ));
 }
 
 #[test]
@@ -488,7 +684,7 @@ fn test_traffic_history_bounding_and_cleanup() {
 #[test]
 fn test_event_timeline_functionality() {
     let mut app = App::default();
-    
+
     app.recent_events.push(NetworkEvent::new(
         lazyifconfig::model::NetworkEventKind::VpnConnected,
         lazyifconfig::model::EventSeverity::Info,
@@ -504,7 +700,13 @@ fn test_event_timeline_functionality() {
     assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Timeline);
     assert_eq!(app.navigation_items.len(), 2);
 
-    if let lazyifconfig::app::NavigationItem::Event { index, kind, message, .. } = &app.navigation_items[0] {
+    if let lazyifconfig::app::NavigationItem::Event {
+        index,
+        kind,
+        message,
+        ..
+    } = &app.navigation_items[0]
+    {
         assert_eq!(*index, 0);
         assert_eq!(*kind, lazyifconfig::model::NetworkEventKind::VpnConnected);
         assert_eq!(message, "utun0 connected");
@@ -512,7 +714,13 @@ fn test_event_timeline_functionality() {
         panic!("Expected NavigationItem::Event at index 0");
     }
 
-    if let lazyifconfig::app::NavigationItem::Event { index, kind, message, .. } = &app.navigation_items[1] {
+    if let lazyifconfig::app::NavigationItem::Event {
+        index,
+        kind,
+        message,
+        ..
+    } = &app.navigation_items[1]
+    {
         assert_eq!(*index, 1);
         assert_eq!(*kind, lazyifconfig::model::NetworkEventKind::InterfaceDown);
         assert_eq!(message, "en0 status changed: up -> down");
@@ -548,7 +756,13 @@ fn test_routes_navigation() {
     assert_eq!(app.view_mode, lazyifconfig::app::ViewMode::Routes);
     assert_eq!(app.navigation_items.len(), 2);
 
-    if let lazyifconfig::app::NavigationItem::Route { destination, gateway, interface, index } = &app.navigation_items[0] {
+    if let lazyifconfig::app::NavigationItem::Route {
+        destination,
+        gateway,
+        interface,
+        index,
+    } = &app.navigation_items[0]
+    {
         assert_eq!(destination, "default");
         assert_eq!(gateway, "192.168.0.1");
         assert_eq!(interface, "en0");
@@ -557,7 +771,13 @@ fn test_routes_navigation() {
         panic!("Expected NavigationItem::Route at index 0");
     }
 
-    if let lazyifconfig::app::NavigationItem::Route { destination, gateway, interface, index } = &app.navigation_items[1] {
+    if let lazyifconfig::app::NavigationItem::Route {
+        destination,
+        gateway,
+        interface,
+        index,
+    } = &app.navigation_items[1]
+    {
         assert_eq!(destination, "10.8.0.0/24");
         assert_eq!(gateway, "10.8.0.1");
         assert_eq!(interface, "utun4");
@@ -577,39 +797,42 @@ fn test_routes_navigation() {
 fn test_raw_viewer_search_highlights() {
     let mut app = App::default();
     let source_id = lazyifconfig::model::CommandSourceId::Ifconfig;
-    
+
     let stdout = "en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n\
                   ether aa:bb:cc:dd:ee:ff\n\
                   inet 192.168.1.12 netmask 0xffffff00 broadcast 192.168.1.255\n\
                   한글 테스트 문장입니다. test line with unicode.";
     let stderr = "some error message";
-    
-    app.command_outputs.insert(source_id, lazyifconfig::model::CommandOutput {
-        command: "ifconfig".to_string(),
-        stdout: stdout.to_string(),
-        stderr: stderr.to_string(),
-        executed_at: std::time::SystemTime::now(),
-        exit_code: Some(0),
-    });
-    
+
+    app.command_outputs.insert(
+        source_id,
+        lazyifconfig::model::CommandOutput {
+            command: "ifconfig".to_string(),
+            stdout: stdout.to_string(),
+            stderr: stderr.to_string(),
+            executed_at: std::time::SystemTime::now(),
+            exit_code: Some(0),
+        },
+    );
+
     app.raw_viewer.sources = vec![source_id];
     app.raw_viewer.selected_index = 0;
-    
+
     // Search query: "inet" (case-insensitive test)
     app.raw_viewer.search_query = "iNeT".to_string();
     app.update_raw_viewer_search_matches();
-    
+
     assert_eq!(app.raw_viewer.search_matches.len(), 1);
     assert_eq!(app.raw_viewer.search_matches[0].line_index, 2);
     assert_eq!(app.raw_viewer.search_matches[0].start_byte, 0);
     assert_eq!(app.raw_viewer.search_matches[0].end_byte, 4);
-    
+
     // Unicode search test
     app.raw_viewer.search_query = "테스트".to_string();
     app.update_raw_viewer_search_matches();
     assert_eq!(app.raw_viewer.search_matches.len(), 1);
     assert_eq!(app.raw_viewer.search_matches[0].line_index, 3);
-    
+
     let text = format!("{}\n{}", stdout, stderr);
     let line_content = text.lines().nth(3).unwrap();
     let m = app.raw_viewer.search_matches[0];

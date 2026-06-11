@@ -1,15 +1,19 @@
 use std::{fs, process::Command, sync::OnceLock};
 
+use crate::app::{
+    App, ConnectionSortColumn, NavigationItem, PortSortColumn, SortDirection, ViewMode,
+};
+use crate::model::{InterfaceStatus, NetworkKind, Subnet};
+use chrono::{DateTime, Local};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Sparkline, Table, Wrap},
+    widgets::{
+        Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Sparkline, Table, Wrap,
+    },
     Frame,
 };
-use crate::app::{App, NavigationItem, PortSortColumn, SortDirection, ViewMode};
-use crate::model::{InterfaceStatus, Subnet, NetworkKind};
-use chrono::{DateTime, Local};
 
 pub fn render_title() -> &'static str {
     "lazyifconfig"
@@ -19,7 +23,9 @@ fn header_line() -> Line<'static> {
     Line::from(vec![
         Span::styled(
             "🦥 Lazyifconfig",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" - ", Style::default().fg(Color::DarkGray)),
         Span::styled(os_display_label(), Style::default().fg(Color::White)),
@@ -108,7 +114,14 @@ fn get_active_command(view_mode: ViewMode) -> &'static str {
 fn get_status_text(app: &App) -> String {
     match app.view_mode {
         ViewMode::Connections => {
-            " q | u check | U update | R notes | c copy | w whois | [/] | i/n/p/e/g ".to_string()
+            if app.connection_filter_active {
+                " filter: type | Enter apply | Esc clear | Backspace delete ".to_string()
+            } else {
+                format!(
+                    " q | / filter | s sort | S dir | c copy | w whois | sort:{} | [/] ",
+                    connection_sort_label(app)
+                )
+            }
         }
         ViewMode::Ports => {
             if app.port_filter_active {
@@ -152,6 +165,22 @@ fn port_sort_label(app: &App) -> String {
     )
 }
 
+fn connection_sort_label(app: &App) -> String {
+    format!(
+        "{} {}",
+        match app.connection_sort_column {
+            ConnectionSortColumn::Local => "Local",
+            ConnectionSortColumn::Foreign => "Foreign",
+            ConnectionSortColumn::State => "State",
+            ConnectionSortColumn::Proto => "Proto",
+        },
+        match app.connection_sort_direction {
+            SortDirection::Ascending => "asc",
+            SortDirection::Descending => "desc",
+        }
+    )
+}
+
 fn view_tabs(view_mode: ViewMode) -> Line<'static> {
     let tabs = [
         (ViewMode::Interface, "Interface(i)"),
@@ -183,29 +212,35 @@ fn view_tabs(view_mode: ViewMode) -> Line<'static> {
 }
 
 pub fn draw(frame: &mut Frame, app: &App) {
-    // When in port filter mode, allocate an extra line for the filter bar
-    let filter_bar_height: u16 = if app.port_filter_active || (app.view_mode == ViewMode::Ports && !app.port_filter.is_empty()) { 1 } else { 0 };
+    let filter_bar_height: u16 = if app.port_filter_active
+        || app.connection_filter_active
+        || (app.view_mode == ViewMode::Ports && !app.port_filter.is_empty())
+        || (app.view_mode == ViewMode::Connections && !app.connection_filter.is_empty())
+    {
+        1
+    } else {
+        0
+    };
     let command_panel_height = command_panel_height(app);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),                 // 0: App Header
-            Constraint::Length(1),                 // 1: View Tabs
-            Constraint::Min(3),                    // 2: Top pane
+            Constraint::Length(1),                    // 0: App Header
+            Constraint::Length(1),                    // 1: View Tabs
+            Constraint::Min(3),                       // 2: Top pane
             Constraint::Length(command_panel_height), // 3: Active Command Panel
-            Constraint::Length(5),                 // 4: Recent Events Panel
-            Constraint::Length(filter_bar_height), // 5: Filter Bar
-            Constraint::Length(1),                 // 6: Status Bar
+            Constraint::Length(5),                    // 4: Recent Events Panel
+            Constraint::Length(filter_bar_height),    // 5: Filter Bar
+            Constraint::Length(1),                    // 6: Status Bar
         ])
         .split(frame.size());
 
-    let header = Paragraph::new(header_line())
-        .style(Style::default().bg(Color::Rgb(24, 24, 24)));
+    let header = Paragraph::new(header_line()).style(Style::default().bg(Color::Rgb(24, 24, 24)));
     frame.render_widget(header, chunks[0]);
 
-    let tabs = Paragraph::new(view_tabs(app.view_mode))
-        .style(Style::default().bg(Color::Rgb(32, 32, 32)));
+    let tabs =
+        Paragraph::new(view_tabs(app.view_mode)).style(Style::default().bg(Color::Rgb(32, 32, 32)));
     frame.render_widget(tabs, chunks[1]);
 
     let top_chunks = Layout::default()
@@ -228,11 +263,13 @@ pub fn draw(frame: &mut Frame, app: &App) {
         ViewMode::Routes => " Routes ",
     };
     let list_block = Block::default().borders(Borders::ALL).title(title);
-    
+
     let mut list_items = Vec::new();
     for (idx, item) in app.navigation_items.iter().enumerate() {
         let style = if idx == app.selected_index {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
@@ -240,18 +277,29 @@ pub fn draw(frame: &mut Frame, app: &App) {
         match item {
             NavigationItem::SubnetHeader(subnet) => {
                 let text = match subnet {
-                    Subnet::Ipv4 { network, prefix_len } => format!("▼ {}/{}", network, prefix_len),
-                    Subnet::Ipv6 { network, prefix_len } => format!("▼ {}/{}", network, prefix_len),
+                    Subnet::Ipv4 {
+                        network,
+                        prefix_len,
+                    } => format!("▼ {}/{}", network, prefix_len),
+                    Subnet::Ipv6 {
+                        network,
+                        prefix_len,
+                    } => format!("▼ {}/{}", network, prefix_len),
                     Subnet::Unassigned => "▼ Unassigned / No IP".to_string(),
                 };
                 let header_style = if idx == app.selected_index {
                     style
                 } else {
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
                 };
                 list_items.push(ListItem::new(text).style(header_style));
             }
-            NavigationItem::Interface { name, associated_ip } => {
+            NavigationItem::Interface {
+                name,
+                associated_ip,
+            } => {
                 let mut status_indicator = "○";
                 let mut is_up = false;
                 let mut kind = NetworkKind::Unknown;
@@ -265,9 +313,19 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 }
 
                 let mut display_text = if app.view_mode == ViewMode::Network {
-                    format!("  {} {} ({})", status_indicator, name, associated_ip.as_deref().unwrap_or("no IP"))
+                    format!(
+                        "  {} {} ({})",
+                        status_indicator,
+                        name,
+                        associated_ip.as_deref().unwrap_or("no IP")
+                    )
                 } else {
-                    format!("{} {} ({})", status_indicator, name, associated_ip.as_deref().unwrap_or("no IP"))
+                    format!(
+                        "{} {} ({})",
+                        status_indicator,
+                        name,
+                        associated_ip.as_deref().unwrap_or("no IP")
+                    )
                 };
 
                 // Add padding to display classification right-aligned nicely
@@ -285,34 +343,74 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 }
                 list_items.push(ListItem::new(display_text).style(final_style));
             }
-            NavigationItem::Connection { proto, local, foreign, state, .. } => {
-                let state_str = state.as_ref().map(|s| format!(" ({})", s)).unwrap_or_default();
-                let text = format!("[{}] {} -> {}{}", proto.to_uppercase(), local, foreign, state_str);
+            NavigationItem::Connection {
+                proto,
+                local,
+                foreign,
+                state,
+                ..
+            } => {
+                let state_str = state
+                    .as_ref()
+                    .map(|s| format!(" ({})", s))
+                    .unwrap_or_default();
+                let text = format!(
+                    "[{}] {} -> {}{}",
+                    proto.to_uppercase(),
+                    local,
+                    foreign,
+                    state_str
+                );
                 list_items.push(ListItem::new(text).style(style));
             }
-            NavigationItem::ListeningPort { proto, port, command, pid, .. } => {
-                let text = format!("[{}] :{:<6} {} (PID: {})", proto.to_uppercase(), port, command, pid);
+            NavigationItem::ListeningPort {
+                proto,
+                port,
+                command,
+                pid,
+                ..
+            } => {
+                let text = format!(
+                    "[{}] :{:<6} {} (PID: {})",
+                    proto.to_uppercase(),
+                    port,
+                    command,
+                    pid
+                );
                 list_items.push(ListItem::new(text).style(style));
             }
-            NavigationItem::Event { index, kind, timestamp, message } => {
+            NavigationItem::Event {
+                index,
+                kind,
+                timestamp,
+                message,
+            } => {
                 let datetime: DateTime<Local> = (*timestamp).into();
                 let time_str = datetime.format("%H:%M:%S").to_string();
                 let text = format!("{} [{}] {}", time_str, kind.as_str(), message);
-                
+
                 // Color code based on severity
                 let mut item_style = style;
                 if idx != app.selected_index {
                     if let Some(event) = app.recent_events.get(*index) {
                         match event.severity {
-                            crate::model::EventSeverity::Warning => item_style = item_style.fg(Color::Yellow),
-                            crate::model::EventSeverity::Error => item_style = item_style.fg(Color::Red),
+                            crate::model::EventSeverity::Warning => {
+                                item_style = item_style.fg(Color::Yellow)
+                            }
+                            crate::model::EventSeverity::Error => {
+                                item_style = item_style.fg(Color::Red)
+                            }
                             crate::model::EventSeverity::Info => {}
                         }
                     }
                 }
                 list_items.push(ListItem::new(text).style(item_style));
             }
-            NavigationItem::Route { destination, interface, .. } => {
+            NavigationItem::Route {
+                destination,
+                interface,
+                ..
+            } => {
                 let text = format!("{:<18} → {}", destination, interface);
                 list_items.push(ListItem::new(text).style(style));
             }
@@ -320,42 +418,53 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
     if app.view_mode == ViewMode::Ports {
         render_ports_table(frame, app, list_block, top_chunks[0]);
+    } else if app.view_mode == ViewMode::Connections {
+        render_connections_table(frame, app, list_block, top_chunks[0]);
     } else {
         let list_widget = List::new(list_items).block(list_block);
         frame.render_widget(list_widget, top_chunks[0]);
     }
 
     // 2. Right Pane: Details Panel
-    let details_block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Details ");
-    
+    let details_block = Block::default().borders(Borders::ALL).title(" Details ");
+
     let details_inner = details_block.inner(top_chunks[1]);
     frame.render_widget(details_block, top_chunks[1]);
-    
+
     if let Some(selected_item) = app.navigation_items.get(app.selected_index) {
         match selected_item {
             NavigationItem::SubnetHeader(subnet) => {
                 let mut details_text = String::new();
                 details_text.push_str("=== Subnet Information ===\n\n");
                 match subnet {
-                    Subnet::Ipv4 { network, prefix_len } => {
+                    Subnet::Ipv4 {
+                        network,
+                        prefix_len,
+                    } => {
                         details_text.push_str(&format!("Protocol:       IPv4\n"));
                         details_text.push_str(&format!("Network Addr:   {}\n", network));
                         details_text.push_str(&format!("Prefix Length:  {}\n", prefix_len));
-                        details_text.push_str(&format!("Subnet Mask:    {}\n", prefix_len_to_ipv4_mask(*prefix_len)));
+                        details_text.push_str(&format!(
+                            "Subnet Mask:    {}\n",
+                            prefix_len_to_ipv4_mask(*prefix_len)
+                        ));
                     }
-                    Subnet::Ipv6 { network, prefix_len } => {
+                    Subnet::Ipv6 {
+                        network,
+                        prefix_len,
+                    } => {
                         details_text.push_str(&format!("Protocol:       IPv6\n"));
                         details_text.push_str(&format!("Network Addr:   {}\n", network));
                         details_text.push_str(&format!("Prefix Length:  {}\n", prefix_len));
                     }
                     Subnet::Unassigned => {
                         details_text.push_str("Protocol:       N/A\n");
-                        details_text.push_str("Description:    Interfaces without an IP Address assigned.\n");
+                        details_text.push_str(
+                            "Description:    Interfaces without an IP Address assigned.\n",
+                        );
                     }
                 }
-                
+
                 details_text.push_str("\nMember Interfaces:\n");
                 if let Some(snapshot) = &app.current_snapshot {
                     for interface in &snapshot.interfaces {
@@ -363,12 +472,17 @@ pub fn draw(frame: &mut Frame, app: &App) {
                         let mut ip_val = "no IP".to_string();
 
                         match subnet {
-                            Subnet::Ipv4 { network, prefix_len } => {
+                            Subnet::Ipv4 {
+                                network,
+                                prefix_len,
+                            } => {
                                 for addr in &interface.ipv4 {
                                     if let Some(p) = addr.prefix_len {
                                         if p == *prefix_len {
-                                            if let Ok(ip) = addr.value.parse::<std::net::Ipv4Addr>() {
-                                                let net_ip = calculate_ipv4_subnet_u32(u32::from(ip), p);
+                                            if let Ok(ip) = addr.value.parse::<std::net::Ipv4Addr>()
+                                            {
+                                                let net_ip =
+                                                    calculate_ipv4_subnet_u32(u32::from(ip), p);
                                                 if net_ip == *network {
                                                     matches_subnet = true;
                                                     ip_val = addr.value.clone();
@@ -379,11 +493,15 @@ pub fn draw(frame: &mut Frame, app: &App) {
                                     }
                                 }
                             }
-                            Subnet::Ipv6 { network, prefix_len } => {
+                            Subnet::Ipv6 {
+                                network,
+                                prefix_len,
+                            } => {
                                 for addr in &interface.ipv6 {
                                     if let Some(p) = addr.prefix_len {
                                         if p == *prefix_len {
-                                            if let Ok(ip) = addr.value.parse::<std::net::Ipv6Addr>() {
+                                            if let Ok(ip) = addr.value.parse::<std::net::Ipv6Addr>()
+                                            {
                                                 let net_ip = calculate_ipv6_subnet_arr(&ip, p);
                                                 if net_ip == *network {
                                                     matches_subnet = true;
@@ -396,8 +514,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
                                 }
                             }
                             Subnet::Unassigned => {
-                                let has_ipv4 = interface.ipv4.iter().any(|a| a.prefix_len.is_some());
-                                let has_ipv6 = interface.ipv6.iter().any(|a| a.prefix_len.is_some());
+                                let has_ipv4 =
+                                    interface.ipv4.iter().any(|a| a.prefix_len.is_some());
+                                let has_ipv6 =
+                                    interface.ipv6.iter().any(|a| a.prefix_len.is_some());
                                 if !has_ipv4 && !has_ipv6 {
                                     matches_subnet = true;
                                 }
@@ -405,11 +525,12 @@ pub fn draw(frame: &mut Frame, app: &App) {
                         }
 
                         if matches_subnet {
-                            details_text.push_str(&format!("  - {} ({})\n", interface.name, ip_val));
+                            details_text
+                                .push_str(&format!("  - {} ({})\n", interface.name, ip_val));
                         }
                     }
                 }
-                
+
                 let details_p = Paragraph::new(details_text)
                     .wrap(Wrap { trim: true })
                     .scroll((app.details_scroll, 0));
@@ -420,37 +541,77 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     if let Some(interface) = snapshot.interfaces.iter().find(|i| i.name == *name) {
                         let sub_chunks = Layout::default()
                             .direction(Direction::Vertical)
-                            .constraints([
-                                Constraint::Min(5),
-                                Constraint::Length(6),
-                            ])
+                            .constraints([Constraint::Min(5), Constraint::Length(6)])
                             .split(details_inner);
 
                         let mut details_text = String::new();
                         details_text.push_str(&format!("Name:           {}\n", interface.name));
-                        details_text.push_str(&format!("Classification: {}\n", interface.network_kind.as_str()));
-                        details_text.push_str(&format!("Status:         {}\n", match interface.status {
-                            InterfaceStatus::Up => "Active / Up",
-                            InterfaceStatus::Down => "Inactive / Down",
-                        }));
-                        details_text.push_str(&format!("MAC Address:    {}\n", interface.mac_address.as_deref().unwrap_or("N/A")));
-                        details_text.push_str(&format!("MTU:            {}\n", interface.mtu.map(|m| m.to_string()).unwrap_or_else(|| "N/A".to_string())));
-                        
+                        details_text.push_str(&format!(
+                            "Classification: {}\n",
+                            interface.network_kind.as_str()
+                        ));
+                        details_text.push_str(&format!(
+                            "Status:         {}\n",
+                            match interface.status {
+                                InterfaceStatus::Up => "Active / Up",
+                                InterfaceStatus::Down => "Inactive / Down",
+                            }
+                        ));
+                        details_text.push_str(&format!(
+                            "MAC Address:    {}\n",
+                            interface.mac_address.as_deref().unwrap_or("N/A")
+                        ));
+                        details_text.push_str(&format!(
+                            "MTU:            {}\n",
+                            interface
+                                .mtu
+                                .map(|m| m.to_string())
+                                .unwrap_or_else(|| "N/A".to_string())
+                        ));
+
                         details_text.push_str("\nIPv4 Addresses:\n");
                         for addr in &interface.ipv4 {
-                            let gw_str = addr.gateway.as_ref().map(|g| format!(" (Gateway: {})", g)).unwrap_or_default();
-                            details_text.push_str(&format!("  - {} / {}{}\n", addr.value, addr.prefix_len.map(|p| p.to_string()).unwrap_or_else(|| "?".to_string()), gw_str));
+                            let gw_str = addr
+                                .gateway
+                                .as_ref()
+                                .map(|g| format!(" (Gateway: {})", g))
+                                .unwrap_or_default();
+                            details_text.push_str(&format!(
+                                "  - {} / {}{}\n",
+                                addr.value,
+                                addr.prefix_len
+                                    .map(|p| p.to_string())
+                                    .unwrap_or_else(|| "?".to_string()),
+                                gw_str
+                            ));
                         }
                         details_text.push_str("IPv6 Addresses:\n");
                         for addr in &interface.ipv6 {
-                            let gw_str = addr.gateway.as_ref().map(|g| format!(" (Gateway: {})", g)).unwrap_or_default();
-                            details_text.push_str(&format!("  - {} / {}{}\n", addr.value, addr.prefix_len.map(|p| p.to_string()).unwrap_or_else(|| "?".to_string()), gw_str));
+                            let gw_str = addr
+                                .gateway
+                                .as_ref()
+                                .map(|g| format!(" (Gateway: {})", g))
+                                .unwrap_or_default();
+                            details_text.push_str(&format!(
+                                "  - {} / {}{}\n",
+                                addr.value,
+                                addr.prefix_len
+                                    .map(|p| p.to_string())
+                                    .unwrap_or_else(|| "?".to_string()),
+                                gw_str
+                            ));
                         }
 
                         details_text.push_str("\nTraffic Cumulative Stats:\n");
                         if let Some(stats) = &interface.stats {
-                            details_text.push_str(&format!("  Packets: RX {} / TX {}\n", stats.rx_packets, stats.tx_packets));
-                            details_text.push_str(&format!("  Bytes:   RX {} / TX {}\n", stats.rx_bytes, stats.tx_bytes));
+                            details_text.push_str(&format!(
+                                "  Packets: RX {} / TX {}\n",
+                                stats.rx_packets, stats.tx_packets
+                            ));
+                            details_text.push_str(&format!(
+                                "  Bytes:   RX {} / TX {}\n",
+                                stats.rx_bytes, stats.tx_bytes
+                            ));
                         } else {
                             details_text.push_str("  No stats available\n");
                         }
@@ -463,10 +624,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                         // Render Charts
                         let chart_chunks = Layout::default()
                             .direction(Direction::Horizontal)
-                            .constraints([
-                                Constraint::Percentage(50),
-                                Constraint::Percentage(50),
-                            ])
+                            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                             .split(sub_chunks[1]);
 
                         let (rx_rate, tx_rate) = app.selected_rates().unwrap_or((0, 0));
@@ -508,25 +666,31 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     }
                 }
             }
-            NavigationItem::Connection { proto, local, foreign, state, index: _ } => {
+            NavigationItem::Connection {
+                proto,
+                local,
+                foreign,
+                state,
+                index: _,
+            } => {
                 let mut details_text = String::new();
                 details_text.push_str("=== Active Connection Details ===\n\n");
                 details_text.push_str(&format!("Protocol:             {}\n", proto.to_uppercase()));
-                
+
                 let local_parts: Vec<&str> = local.split(':').collect();
                 let local_ip = local_parts[0];
                 let local_port = local_parts.get(1).unwrap_or(&"*");
-                
+
                 details_text.push_str(&format!("Local IP Address:     {}\n", local_ip));
                 details_text.push_str(&format!("Local Port:           {}\n", local_port));
-                
+
                 let foreign_parts: Vec<&str> = foreign.split(':').collect();
                 let foreign_ip = foreign_parts[0];
                 let foreign_port = foreign_parts.get(1).unwrap_or(&"*");
-                
+
                 details_text.push_str(&format!("Foreign IP Address:   {}\n", foreign_ip));
                 details_text.push_str(&format!("Foreign Port:         {}\n", foreign_port));
-                
+
                 if let Some(s) = state {
                     details_text.push_str(&format!("TCP State:            {}\n", s));
                 }
@@ -538,7 +702,8 @@ pub fn draw(frame: &mut Frame, app: &App) {
                         let matches_ipv4 = interface.ipv4.iter().any(|addr| addr.value == local_ip);
                         let matches_ipv6 = interface.ipv6.iter().any(|addr| addr.value == local_ip);
                         if matches_ipv4 || matches_ipv6 {
-                            mapped_interface = format!("{} ({})", interface.name, interface.network_kind.as_str());
+                            mapped_interface =
+                                format!("{} ({})", interface.name, interface.network_kind.as_str());
                             break;
                         }
                     }
@@ -548,10 +713,14 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 } else if local_ip == "*" || local_ip == "::" || local_ip == "0.0.0.0" {
                     mapped_interface = "All Interfaces (Wildcard)".to_string();
                 }
-                
+
                 details_text.push_str(&format!("Associated Interface: {}\n", mapped_interface));
 
-                if foreign_ip != "*" && foreign_ip != "::" && foreign_ip != "0.0.0.0" && foreign_ip != "*.*" {
+                if foreign_ip != "*"
+                    && foreign_ip != "::"
+                    && foreign_ip != "0.0.0.0"
+                    && foreign_ip != "*.*"
+                {
                     details_text.push_str("\n[c: Copy IP | w: WHOIS Query]\n");
                     if let Some(whois) = app.get_whois_result(foreign_ip) {
                         details_text.push_str("\n=== Whois Information ===\n");
@@ -567,16 +736,18 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     if line.contains("=== Whois Information ===") {
                         in_whois_section = true;
                     }
-                    
+
                     let is_highlight = in_whois_section && {
                         let lower = line.to_lowercase();
                         lower.contains("origin") || lower.contains("org")
                     };
-                    
+
                     if is_highlight {
                         ui_lines.push(Line::from(Span::styled(
                             line.to_string(),
-                            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
                         )));
                     } else {
                         ui_lines.push(Line::from(line.to_string()));
@@ -588,37 +759,68 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     .scroll((app.details_scroll, 0));
                 frame.render_widget(details_p, details_inner);
             }
-            NavigationItem::ListeningPort { proto, port, command, pid, user, .. } => {
+            NavigationItem::ListeningPort {
+                proto,
+                port,
+                command,
+                pid,
+                user,
+                ..
+            } => {
                 let mut lines = Vec::new();
                 lines.push(Line::from(Span::styled(
                     "=== Listening Port Details ===",
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 )));
                 lines.push(Line::from(""));
                 lines.push(Line::from(vec![
-                    Span::styled("Protocol:   ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "Protocol:   ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
                     Span::raw(proto.to_uppercase()),
                 ]));
                 lines.push(Line::from(vec![
-                    Span::styled("Port:       ", Style::default().add_modifier(Modifier::BOLD)),
-                    Span::styled(port.as_str(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "Port:       ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        port.as_str(),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                 ]));
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     "=== Process Information ===",
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 )));
                 lines.push(Line::from(""));
                 lines.push(Line::from(vec![
-                    Span::styled("Command:    ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "Command:    ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(command.as_str(), Style::default().fg(Color::Green)),
                 ]));
                 lines.push(Line::from(vec![
-                    Span::styled("PID:        ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "PID:        ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
                     Span::raw(pid.as_str()),
                 ]));
                 lines.push(Line::from(vec![
-                    Span::styled("User:       ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "User:       ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
                     Span::raw(user.as_str()),
                 ]));
 
@@ -627,25 +829,43 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     .scroll((app.details_scroll, 0));
                 frame.render_widget(details_p, details_inner);
             }
-            NavigationItem::Event { index, kind, timestamp, message } => {
+            NavigationItem::Event {
+                index,
+                kind,
+                timestamp,
+                message,
+            } => {
                 let mut lines = Vec::new();
                 lines.push(Line::from(Span::styled(
                     "=== Event Details ===",
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 )));
                 lines.push(Line::from(""));
                 lines.push(Line::from(vec![
-                    Span::styled("Type:        ", Style::default().add_modifier(Modifier::BOLD)),
-                    Span::styled(kind.as_str(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "Type:        ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        kind.as_str(),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                 ]));
-                
+
                 let datetime: DateTime<Local> = (*timestamp).into();
                 let time_str = datetime.format("%Y-%m-%d %H:%M:%S").to_string();
                 lines.push(Line::from(vec![
-                    Span::styled("Time:        ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "Time:        ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
                     Span::raw(time_str),
                 ]));
-                
+
                 let severity_str = if let Some(event) = app.recent_events.get(*index) {
                     event.severity.as_str()
                 } else {
@@ -657,16 +877,27 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     _ => Color::Green,
                 };
                 lines.push(Line::from(vec![
-                    Span::styled("Severity:    ", Style::default().add_modifier(Modifier::BOLD)),
-                    Span::styled(severity_str, Style::default().fg(severity_color).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "Severity:    ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        severity_str,
+                        Style::default()
+                            .fg(severity_color)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                 ]));
-                
+
                 lines.push(Line::from(""));
                 lines.push(Line::from(vec![
-                    Span::styled("Description: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "Description: ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
                     Span::raw(message.as_str()),
                 ]));
-                
+
                 let impact = match kind {
                     crate::model::NetworkEventKind::VpnConnected => "Traffic may be routed through VPN. Default routes might change.",
                     crate::model::NetworkEventKind::VpnDisconnected => "VPN connection lost. Traffic will not be routed through VPN.",
@@ -692,7 +923,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     "=== Expected Impact ===",
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 )));
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::raw(impact)));
@@ -702,54 +935,85 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     .scroll((app.details_scroll, 0));
                 frame.render_widget(details_p, details_inner);
             }
-            NavigationItem::Route { destination, gateway, interface, .. } => {
+            NavigationItem::Route {
+                destination,
+                gateway,
+                interface,
+                ..
+            } => {
                 let mut lines = Vec::new();
-                
+
                 // 1. Selected Route
                 lines.push(Line::from(Span::styled(
                     "=== Selected Route ===",
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 )));
                 lines.push(Line::from(""));
                 lines.push(Line::from(vec![
-                    Span::styled("Destination:   ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "Destination:   ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
                     Span::raw(destination.as_str()),
                 ]));
                 lines.push(Line::from(vec![
-                    Span::styled("Gateway:       ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "Gateway:       ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
                     Span::raw(gateway.as_str()),
                 ]));
                 lines.push(Line::from(vec![
-                    Span::styled("Interface:     ", Style::default().add_modifier(Modifier::BOLD)),
-                    Span::styled(interface.as_str(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "Interface:     ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        interface.as_str(),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                 ]));
                 lines.push(Line::from(""));
 
                 // 2. Default Route Summary
                 lines.push(Line::from(Span::styled(
                     "=== Default Route Summary ===",
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 )));
                 lines.push(Line::from(""));
-                
+
                 let mut def_gw = "None".to_string();
                 let mut def_if = "None".to_string();
                 if let Some(snapshot) = &app.current_snapshot {
                     // Search for active default route in routes table
-                    if let Some(def_route) = snapshot.routes.iter().find(|r| {
-                        r.destination == "default" && !r.gateway.starts_with("link#")
-                    }) {
+                    if let Some(def_route) = snapshot
+                        .routes
+                        .iter()
+                        .find(|r| r.destination == "default" && !r.gateway.starts_with("link#"))
+                    {
                         def_gw = def_route.gateway.clone();
                         def_if = def_route.interface.clone();
                     }
                 }
-                
+
                 lines.push(Line::from(vec![
-                    Span::styled("Gateway:       ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "Gateway:       ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
                     Span::raw(def_gw),
                 ]));
                 lines.push(Line::from(vec![
-                    Span::styled("Interface:     ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "Interface:     ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(def_if, Style::default().fg(Color::Green)),
                 ]));
                 lines.push(Line::from(""));
@@ -757,21 +1021,37 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 // 3. Public IP connectivity
                 lines.push(Line::from(Span::styled(
                     "=== Public IP Connectivity ===",
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 )));
                 lines.push(Line::from(""));
-                
+
                 if let Some(ip_info) = &app.current_public_ip_info {
                     lines.push(Line::from(vec![
-                        Span::styled("IP Address:    ", Style::default().add_modifier(Modifier::BOLD)),
-                        Span::styled(ip_info.ip.as_str(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            "IP Address:    ",
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            ip_info.ip.as_str(),
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        ),
                     ]));
                     lines.push(Line::from(vec![
-                        Span::styled("ISP/Provider:  ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            "ISP/Provider:  ",
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
                         Span::raw(ip_info.provider.as_deref().unwrap_or("Unknown")),
                     ]));
                     lines.push(Line::from(vec![
-                        Span::styled("Country:       ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            "Country:       ",
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
                         Span::raw(ip_info.country.as_deref().unwrap_or("Unknown")),
                     ]));
                 } else {
@@ -793,7 +1073,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     // 3. Active Command Panel
     let (command_lines, command_style) = build_command_panel(app);
-    let command_p = Paragraph::new(command_lines).style(command_style).wrap(Wrap { trim: true });
+    let command_p = Paragraph::new(command_lines)
+        .style(command_style)
+        .wrap(Wrap { trim: true });
     frame.render_widget(command_p, chunks[3]);
 
     // 4. Event Panel
@@ -804,27 +1086,33 @@ pub fn draw(frame: &mut Frame, app: &App) {
     for event in app.recent_events.iter().rev().take(10) {
         let datetime: DateTime<Local> = event.timestamp.into();
         let time_str = datetime.format("%H:%M:%S").to_string();
-        
+
         let mut item_style = Style::default();
         match event.severity {
             crate::model::EventSeverity::Warning => item_style = item_style.fg(Color::Yellow),
             crate::model::EventSeverity::Error => item_style = item_style.fg(Color::Red),
             _ => {}
         }
-        
-        event_items.push(ListItem::new(format!("[{}] {}", time_str, event.message)).style(item_style));
+
+        event_items
+            .push(ListItem::new(format!("[{}] {}", time_str, event.message)).style(item_style));
     }
     let event_list = List::new(event_items).block(event_block);
     frame.render_widget(event_list, chunks[4]);
 
-    // 5. Filter Bar (Ports view only)
+    // 5. Filter Bar
     if filter_bar_height > 0 {
-        let filter_text = if app.port_filter_active {
-            format!(" 🔍 Filter: {}▌", app.port_filter)
+        let (filter_value, filter_active) = if app.view_mode == ViewMode::Connections {
+            (app.connection_filter.as_str(), app.connection_filter_active)
         } else {
-            format!(" 🔍 Filter: {}  (/: edit, Esc: clear)", app.port_filter)
+            (app.port_filter.as_str(), app.port_filter_active)
         };
-        let filter_style = if app.port_filter_active {
+        let filter_text = if filter_active {
+            format!(" 🔍 Filter: {}▌", filter_value)
+        } else {
+            format!(" 🔍 Filter: {}  (/: edit, Esc: clear)", filter_value)
+        };
+        let filter_style = if filter_active {
             Style::default().bg(Color::DarkGray).fg(Color::Yellow)
         } else {
             Style::default().bg(Color::DarkGray).fg(Color::White)
@@ -836,8 +1124,12 @@ pub fn draw(frame: &mut Frame, app: &App) {
     // 6. Status Bar
     let status_idx = 6;
     let status_text = get_status_text(app);
-    let status_p = Paragraph::new(status_text)
-        .style(Style::default().bg(Color::Black).fg(Color::LightYellow).add_modifier(Modifier::BOLD));
+    let status_p = Paragraph::new(status_text).style(
+        Style::default()
+            .bg(Color::Black)
+            .fg(Color::LightYellow)
+            .add_modifier(Modifier::BOLD),
+    );
     frame.render_widget(status_p, chunks[status_idx]);
 
     if app.help_visible {
@@ -861,7 +1153,11 @@ fn render_ports_table(frame: &mut Frame, app: &App, block: Block<'_>, area: Rect
         Cell::from(port_header_label(app, PortSortColumn::Pid, "PID")),
         Cell::from(port_header_label(app, PortSortColumn::User, "User")),
     ])
-    .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+    .style(
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    );
 
     let rows = app
         .navigation_items
@@ -881,18 +1177,20 @@ fn render_ports_table(frame: &mut Frame, app: &App, block: Block<'_>, area: Rect
             };
 
             let style = if idx == app.selected_index {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
 
             Some(
                 Row::new([
-                    Cell::from(proto.to_uppercase()),
-                    Cell::from(port.clone()),
-                    Cell::from(command.clone()),
-                    Cell::from(pid.clone()),
-                    Cell::from(user.clone()),
+                    highlighted_filter_cell(proto.to_uppercase(), &app.port_filter),
+                    highlighted_filter_cell(port.clone(), &app.port_filter),
+                    highlighted_filter_cell(command.clone(), &app.port_filter),
+                    highlighted_filter_cell(pid.clone(), &app.port_filter),
+                    highlighted_filter_cell(user.clone(), &app.port_filter),
                 ])
                 .style(style),
             )
@@ -915,6 +1213,89 @@ fn render_ports_table(frame: &mut Frame, app: &App, block: Block<'_>, area: Rect
     frame.render_widget(table, area);
 }
 
+fn render_connections_table(frame: &mut Frame, app: &App, block: Block<'_>, area: Rect) {
+    let header = Row::new([
+        Cell::from(connection_header_label(
+            app,
+            ConnectionSortColumn::Proto,
+            "Proto",
+        )),
+        Cell::from(connection_header_label(
+            app,
+            ConnectionSortColumn::Local,
+            "Local",
+        )),
+        Cell::from(connection_header_label(
+            app,
+            ConnectionSortColumn::Foreign,
+            "Foreign",
+        )),
+        Cell::from(connection_header_label(
+            app,
+            ConnectionSortColumn::State,
+            "State",
+        )),
+    ])
+    .style(
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    );
+
+    let rows = app
+        .navigation_items
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, item)| {
+            let NavigationItem::Connection {
+                proto,
+                local,
+                foreign,
+                state,
+                ..
+            } = item
+            else {
+                return None;
+            };
+
+            let style = if idx == app.selected_index {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            Some(
+                Row::new([
+                    highlighted_filter_cell(proto.to_uppercase(), &app.connection_filter),
+                    highlighted_filter_cell(local.clone(), &app.connection_filter),
+                    highlighted_filter_cell(foreign.clone(), &app.connection_filter),
+                    highlighted_filter_cell(
+                        state.clone().unwrap_or_default(),
+                        &app.connection_filter,
+                    ),
+                ])
+                .style(style),
+            )
+        });
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(5),
+            Constraint::Percentage(34),
+            Constraint::Percentage(40),
+            Constraint::Length(10),
+        ],
+    )
+    .header(header)
+    .column_spacing(1)
+    .block(block);
+
+    frame.render_widget(table, area);
+}
+
 fn port_header_label(app: &App, column: PortSortColumn, label: &str) -> String {
     if app.port_sort_column != column {
         return label.to_string();
@@ -925,6 +1306,59 @@ fn port_header_label(app: &App, column: PortSortColumn, label: &str) -> String {
         SortDirection::Descending => "↓",
     };
     format!("{label} {arrow}")
+}
+
+fn connection_header_label(app: &App, column: ConnectionSortColumn, label: &str) -> String {
+    if app.connection_sort_column != column {
+        return label.to_string();
+    }
+
+    let arrow = match app.connection_sort_direction {
+        SortDirection::Ascending => "↑",
+        SortDirection::Descending => "↓",
+    };
+    format!("{label} {arrow}")
+}
+
+fn highlighted_filter_cell(value: String, query: &str) -> Cell<'static> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Cell::from(value);
+    }
+
+    let value_lower = value.to_lowercase();
+    let query_lower = query.to_lowercase();
+    let mut spans = Vec::new();
+    let mut cursor = 0;
+
+    while let Some(offset) = value_lower[cursor..].find(&query_lower) {
+        let start = cursor + offset;
+        let end = start + query_lower.len();
+        if !value.is_char_boundary(start) || !value.is_char_boundary(end) {
+            break;
+        }
+
+        if start > cursor {
+            spans.push(Span::raw(value[cursor..start].to_string()));
+        }
+        spans.push(Span::styled(
+            value[start..end].to_string(),
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+        cursor = end;
+    }
+
+    if spans.is_empty() {
+        Cell::from(value)
+    } else {
+        if cursor < value.len() {
+            spans.push(Span::raw(value[cursor..].to_string()));
+        }
+        Cell::from(Line::from(spans))
+    }
 }
 
 fn draw_help(frame: &mut Frame) {
@@ -978,11 +1412,13 @@ fn update_status_label(app: &App) -> String {
 }
 
 fn command_panel_height(app: &App) -> u16 {
-    if matches!(&app.update_status, crate::update::UpdateStatus::Available { .. })
-        && app
-            .pending_update
-            .as_ref()
-            .is_some_and(|update| !update.release_notes.trim().is_empty())
+    if matches!(
+        &app.update_status,
+        crate::update::UpdateStatus::Available { .. }
+    ) && app
+        .pending_update
+        .as_ref()
+        .is_some_and(|update| !update.release_notes.trim().is_empty())
     {
         2
     } else {
@@ -995,19 +1431,46 @@ fn build_command_panel(app: &App) -> (Vec<Line<'static>>, Style) {
     match &app.update_status {
         crate::update::UpdateStatus::Available { version } => {
             let mut lines = vec![Line::from(vec![
-                Span::styled(" UPDATE READY ", Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " UPDATE READY ",
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" "),
-                Span::styled(format!("v{version}"), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("v{version}"),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" "),
-                Span::styled("PRESS U TO INSTALL", Style::default().fg(Color::White).add_modifier(Modifier::BOLD | Modifier::RAPID_BLINK)),
+                Span::styled(
+                    "PRESS U TO INSTALL",
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD | Modifier::RAPID_BLINK),
+                ),
                 Span::raw("   "),
-                Span::styled("u re-check", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "u re-check",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ])];
 
             if let Some(update) = &app.pending_update {
                 let notes = summarize_release_notes_for_banner(&update.release_notes, 96);
                 lines.push(Line::from(vec![
-                    Span::styled(" Notes: ", Style::default().fg(Color::Black).bg(Color::LightYellow).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        " Notes: ",
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::LightYellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(notes, Style::default().fg(Color::White)),
                 ]));
             }
@@ -1016,42 +1479,108 @@ fn build_command_panel(app: &App) -> (Vec<Line<'static>>, Style) {
         }
         crate::update::UpdateStatus::Installing { version, .. } => (
             vec![Line::from(vec![
-                Span::styled(" INSTALLING UPDATE ", Style::default().fg(Color::Black).bg(Color::LightBlue).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " INSTALLING UPDATE ",
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::LightBlue)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" "),
-                Span::styled(format!("v{version}"), Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("v{version}"),
+                    Style::default()
+                        .fg(Color::LightBlue)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" "),
-                Span::styled("please wait", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "please wait",
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ])],
             Style::default().bg(Color::DarkGray),
         ),
         crate::update::UpdateStatus::Updated { version } => (
             vec![Line::from(vec![
-                Span::styled(" UPDATE INSTALLED ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " UPDATE INSTALLED ",
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" "),
-                Span::styled(format!("v{version}"), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("v{version}"),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" "),
-                Span::styled("restart app", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "restart app",
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ])],
             Style::default().bg(Color::DarkGray),
         ),
         crate::update::UpdateStatus::Error { .. } => (
             vec![Line::from(vec![
-                Span::styled(" UPDATE FAILED ", Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " UPDATE FAILED ",
+                    Style::default()
+                        .fg(Color::White)
+                        .bg(Color::Red)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" "),
-                Span::styled("press u to check again", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "press u to check again",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
             ])],
             Style::default().bg(Color::DarkGray),
         ),
         _ => (
             vec![Line::from(vec![
-                Span::styled("$ ", Style::default().fg(Color::Rgb(0, 255, 102)).add_modifier(Modifier::BOLD)),
-                Span::styled(command_str, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "$ ",
+                    Style::default()
+                        .fg(Color::Rgb(0, 255, 102))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    command_str,
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("   "),
-                Span::styled(update_status_label(app), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    update_status_label(app),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("   "),
-                Span::styled("o[output]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "o[output]",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" "),
-                Span::styled("?[help]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "?[help]",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ])],
             Style::default(),
         ),
@@ -1142,11 +1671,26 @@ fn draw_release_notes_viewer(frame: &mut Frame, app: &App) {
 
     let header = Paragraph::new(vec![
         Line::from(vec![
-            Span::styled("Version: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("v{}", update.target_version), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Version: ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("v{}", update.target_version),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(vec![
-            Span::styled("Release: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Release: ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(update.release_url.as_str()),
         ]),
     ])
@@ -1185,25 +1729,39 @@ fn get_centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-fn build_matched_line<'a>(line: &'a str, matches_in_line: &[&crate::app::SearchMatch], text_color: Color, highlight_color: Color) -> Line<'a> {
+fn build_matched_line<'a>(
+    line: &'a str,
+    matches_in_line: &[&crate::app::SearchMatch],
+    text_color: Color,
+    highlight_color: Color,
+) -> Line<'a> {
     let mut spans = Vec::new();
     let mut last_idx = 0;
 
     for m in matches_in_line {
         if line.is_char_boundary(m.start_byte) && line.is_char_boundary(m.end_byte) {
             if m.start_byte > last_idx && line.is_char_boundary(last_idx) {
-                spans.push(Span::styled(&line[last_idx..m.start_byte], Style::default().fg(text_color)));
+                spans.push(Span::styled(
+                    &line[last_idx..m.start_byte],
+                    Style::default().fg(text_color),
+                ));
             }
             spans.push(Span::styled(
                 &line[m.start_byte..m.end_byte],
-                Style::default().fg(Color::Black).bg(highlight_color).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(highlight_color)
+                    .add_modifier(Modifier::BOLD),
             ));
             last_idx = m.end_byte;
         }
     }
 
     if last_idx < line.len() && line.is_char_boundary(last_idx) {
-        spans.push(Span::styled(&line[last_idx..], Style::default().fg(text_color)));
+        spans.push(Span::styled(
+            &line[last_idx..],
+            Style::default().fg(text_color),
+        ));
     }
 
     Line::from(spans)
@@ -1225,7 +1783,12 @@ fn draw_raw_viewer(frame: &mut Frame, app: &App) {
     frame.render_widget(main_block, area);
 
     // Inner area for contents
-    let inner_area = Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), area.height.saturating_sub(2));
+    let inner_area = Rect::new(
+        area.x + 1,
+        area.y + 1,
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    );
 
     let vertical_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -1238,24 +1801,35 @@ fn draw_raw_viewer(frame: &mut Frame, app: &App) {
         .split(inner_area);
 
     // 1. Sources Tab Bar
-    let mut tab_spans = vec![Span::styled("Sources: ", Style::default().fg(Color::DarkGray))];
+    let mut tab_spans = vec![Span::styled(
+        "Sources: ",
+        Style::default().fg(Color::DarkGray),
+    )];
     for (i, src) in app.raw_viewer.sources.iter().enumerate() {
         if i > 0 {
             tab_spans.push(Span::styled("  |  ", Style::default().fg(Color::DarkGray)));
         }
         let style = if i == app.raw_viewer.selected_index {
-            Style::default().bg(Color::Rgb(0, 255, 102)).fg(Color::Black).add_modifier(Modifier::BOLD)
+            Style::default()
+                .bg(Color::Rgb(0, 255, 102))
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Rgb(192, 255, 192))
         };
         tab_spans.push(Span::styled(format!(" {} ", src.as_str()), style));
     }
-    let tab_p = Paragraph::new(Line::from(tab_spans)).style(Style::default().bg(Color::Rgb(0, 0, 0)));
+    let tab_p =
+        Paragraph::new(Line::from(tab_spans)).style(Style::default().bg(Color::Rgb(0, 0, 0)));
     frame.render_widget(tab_p, vertical_chunks[0]);
 
     // 2. Separator Line
     let separator_text = "─".repeat(inner_area.width as usize);
-    let separator_p = Paragraph::new(separator_text).style(Style::default().fg(Color::Rgb(68, 68, 68)).bg(Color::Rgb(0, 0, 0)));
+    let separator_p = Paragraph::new(separator_text).style(
+        Style::default()
+            .fg(Color::Rgb(68, 68, 68))
+            .bg(Color::Rgb(0, 0, 0)),
+    );
     frame.render_widget(separator_p, vertical_chunks[1]);
 
     // 3. Command Output Content
@@ -1267,8 +1841,18 @@ fn draw_raw_viewer(frame: &mut Frame, app: &App) {
         if let Some(output) = app.command_outputs.get(&src) {
             // Command prompt
             lines.push(Line::from(vec![
-                Span::styled("$ ", Style::default().fg(Color::Rgb(0, 255, 102)).add_modifier(Modifier::BOLD)),
-                Span::styled(&output.command, Style::default().fg(Color::Rgb(0, 255, 102)).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "$ ",
+                    Style::default()
+                        .fg(Color::Rgb(0, 255, 102))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    &output.command,
+                    Style::default()
+                        .fg(Color::Rgb(0, 255, 102))
+                        .add_modifier(Modifier::BOLD),
+                ),
             ]));
 
             // Timestamp and Exit Code
@@ -1279,10 +1863,17 @@ fn draw_raw_viewer(frame: &mut Frame, app: &App) {
                 None => "None".to_string(),
             };
             lines.push(Line::from(vec![
-                Span::styled(format!("Executed: {}  |  Exit Code: ", time_str), Style::default().fg(Color::Rgb(128, 128, 128))),
+                Span::styled(
+                    format!("Executed: {}  |  Exit Code: ", time_str),
+                    Style::default().fg(Color::Rgb(128, 128, 128)),
+                ),
                 Span::styled(
                     exit_str,
-                    Style::default().fg(if output.exit_code == Some(0) { Color::Rgb(0, 255, 102) } else { Color::Rgb(255, 102, 102) })
+                    Style::default().fg(if output.exit_code == Some(0) {
+                        Color::Rgb(0, 255, 102)
+                    } else {
+                        Color::Rgb(255, 102, 102)
+                    }),
                 ),
             ]));
             lines.push(Line::raw(""));
@@ -1291,11 +1882,17 @@ fn draw_raw_viewer(frame: &mut Frame, app: &App) {
             text_store.push_str(&output.stdout);
             text_store.push('\n');
             text_store.push_str(&output.stderr);
-            let text_color = if output.exit_code == Some(0) { Color::Rgb(192, 255, 192) } else { Color::Rgb(255, 102, 102) };
+            let text_color = if output.exit_code == Some(0) {
+                Color::Rgb(192, 255, 192)
+            } else {
+                Color::Rgb(255, 102, 102)
+            };
             let highlight_color = Color::Rgb(255, 204, 0);
 
             for (line_idx, line) in text_store.lines().enumerate() {
-                let matches_in_line: Vec<&crate::app::SearchMatch> = app.raw_viewer.search_matches
+                let matches_in_line: Vec<&crate::app::SearchMatch> = app
+                    .raw_viewer
+                    .search_matches
                     .iter()
                     .filter(|m| m.line_index == line_idx)
                     .collect();
@@ -1303,14 +1900,25 @@ fn draw_raw_viewer(frame: &mut Frame, app: &App) {
                 if matches_in_line.is_empty() {
                     lines.push(Line::styled(line, Style::default().fg(text_color)));
                 } else {
-                    lines.push(build_matched_line(line, &matches_in_line, text_color, highlight_color));
+                    lines.push(build_matched_line(
+                        line,
+                        &matches_in_line,
+                        text_color,
+                        highlight_color,
+                    ));
                 }
             }
         } else {
-            lines.push(Line::styled("Command execution history not found.", Style::default().fg(Color::Rgb(255, 102, 102))));
+            lines.push(Line::styled(
+                "Command execution history not found.",
+                Style::default().fg(Color::Rgb(255, 102, 102)),
+            ));
         }
     } else {
-        lines.push(Line::styled("No source selected.", Style::default().fg(Color::Rgb(255, 102, 102))));
+        lines.push(Line::styled(
+            "No source selected.",
+            Style::default().fg(Color::Rgb(255, 102, 102)),
+        ));
     }
 
     let lines_count = lines.len();
@@ -1326,30 +1934,49 @@ fn draw_raw_viewer(frame: &mut Frame, app: &App) {
     // 4. Status Bar / Search Prompt
     let status_line = if app.raw_viewer.search_active {
         Line::from(vec![
-            Span::styled("Search: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::styled(&app.raw_viewer.search_query, Style::default().fg(Color::White)),
+            Span::styled(
+                "Search: ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                &app.raw_viewer.search_query,
+                Style::default().fg(Color::White),
+            ),
             Span::styled("█", Style::default().fg(Color::Yellow)),
         ])
     } else if !app.raw_viewer.search_query.is_empty() {
-        let current = if app.raw_viewer.search_matches.is_empty() { 0 } else { app.raw_viewer.current_match_index + 1 };
+        let current = if app.raw_viewer.search_matches.is_empty() {
+            0
+        } else {
+            app.raw_viewer.current_match_index + 1
+        };
         let total = app.raw_viewer.search_matches.len();
         Line::from(vec![
             Span::styled("Search: ", Style::default().fg(Color::Yellow)),
-            Span::styled(format!("{} ({} / {})  -  n: Next, N: Prev  |  ", app.raw_viewer.search_query, current, total), Style::default().fg(Color::White)),
-            Span::styled("Esc/q/o: Close | Tab: Next Src | y: Copy Cmd | Y: Copy Output", Style::default().fg(Color::Gray)),
+            Span::styled(
+                format!(
+                    "{} ({} / {})  -  n: Next, N: Prev  |  ",
+                    app.raw_viewer.search_query, current, total
+                ),
+                Style::default().fg(Color::White),
+            ),
+            Span::styled(
+                "Esc/q/o: Close | Tab: Next Src | y: Copy Cmd | Y: Copy Output",
+                Style::default().fg(Color::Gray),
+            ),
         ])
     } else {
         Line::from(Span::styled(
             "Esc/q/o: Close | Tab: Next Src | y: Copy Cmd | Y: Copy Output | /: Search",
-            Style::default().fg(Color::Rgb(180, 180, 180))
+            Style::default().fg(Color::Rgb(180, 180, 180)),
         ))
     };
 
-    let status_p = Paragraph::new(status_line)
-        .style(Style::default().bg(Color::Rgb(30, 30, 30)));
+    let status_p = Paragraph::new(status_line).style(Style::default().bg(Color::Rgb(30, 30, 30)));
     frame.render_widget(status_p, vertical_chunks[3]);
 }
-
 
 fn prefix_len_to_ipv4_mask(prefix_len: u8) -> String {
     let mask = if prefix_len == 0 {
@@ -1410,8 +2037,8 @@ fn format_bps(bytes_per_sec: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{backend::TestBackend, Terminal};
     use crate::app::App;
+    use ratatui::{backend::TestBackend, Terminal};
 
     #[test]
     fn test_ui_draw_no_panic() {
@@ -1439,7 +2066,7 @@ mod tests {
             NavigationItem::Interface {
                 name: "en0".to_string(),
                 associated_ip: Some("192.168.0.15".to_string()),
-            }
+            },
         ];
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1604,6 +2231,101 @@ mod tests {
     }
 
     #[test]
+    fn test_ports_filter_highlights_matching_text() {
+        let mut app = App::default();
+        app.view_mode = ViewMode::Ports;
+        app.port_filter = "server".to_string();
+        app.navigation_items = vec![NavigationItem::ListeningPort {
+            proto: "tcp".to_string(),
+            port: "8080".to_string(),
+            command: "my-server".to_string(),
+            pid: "12345".to_string(),
+            user: "alice".to_string(),
+            index: 0,
+        }];
+
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let has_highlight = (2..18).any(|y| {
+            (0..48).any(|x| {
+                let cell = buffer.get(x, y);
+                cell.bg == Color::Yellow
+                    && cell.fg == Color::Black
+                    && cell.modifier.contains(Modifier::BOLD)
+            })
+        });
+
+        assert!(has_highlight);
+    }
+
+    #[test]
+    fn test_connections_view_renders_table_columns() {
+        let mut app = App::default();
+        app.view_mode = ViewMode::Connections;
+        app.navigation_items = vec![NavigationItem::Connection {
+            proto: "tcp".to_string(),
+            local: "127.0.0.1:5".to_string(),
+            foreign: "1.1.1.1:443".to_string(),
+            state: Some("ESTAB".to_string()),
+            index: 0,
+        }];
+
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let mut left_pane = String::new();
+        for y in 0..24 {
+            for x in 0..48 {
+                left_pane.push_str(buffer.get(x, y).symbol());
+            }
+        }
+
+        assert!(left_pane.contains("Proto"));
+        assert!(left_pane.contains("Local ↑"));
+        assert!(left_pane.contains("Foreign"));
+        assert!(left_pane.contains("State"));
+        assert!(left_pane.contains("TCP"));
+        assert!(left_pane.contains("127.0.0.1:5"));
+        assert!(left_pane.contains("1.1.1.1:443"));
+        assert!(left_pane.contains("ESTAB"));
+    }
+
+    #[test]
+    fn test_connections_filter_highlights_matching_text() {
+        let mut app = App::default();
+        app.view_mode = ViewMode::Connections;
+        app.connection_filter = "1.1.1.1".to_string();
+        app.navigation_items = vec![NavigationItem::Connection {
+            proto: "tcp".to_string(),
+            local: "127.0.0.1:5".to_string(),
+            foreign: "1.1.1.1:443".to_string(),
+            state: Some("ESTAB".to_string()),
+            index: 0,
+        }];
+
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let has_highlight = (2..18).any(|y| {
+            (0..48).any(|x| {
+                let cell = buffer.get(x, y);
+                cell.bg == Color::Yellow
+                    && cell.fg == Color::Black
+                    && cell.modifier.contains(Modifier::BOLD)
+            })
+        });
+
+        assert!(has_highlight);
+    }
+
+    #[test]
     fn test_update_available_renders_loud_banner() {
         let mut app = App::default();
         app.update_status = crate::update::UpdateStatus::Available {
@@ -1615,7 +2337,8 @@ mod tests {
             release_url: "https://example.com/release".to_string(),
             asset_name: "lazyifconfig-v9.9.9-aarch64-apple-darwin.tar.gz".to_string(),
             download_url: "https://example.com/release.tar.gz".to_string(),
-            release_notes: "Big networking refresh\nFaster route parsing\nExtra diagnostics".to_string(),
+            release_notes: "Big networking refresh\nFaster route parsing\nExtra diagnostics"
+                .to_string(),
         });
 
         let backend = TestBackend::new(120, 24);
@@ -1653,7 +2376,12 @@ mod tests {
             let status = get_status_text(&app);
 
             assert!(!status.contains("Raw Output"));
-            assert!(status.len() <= 90, "status too long for {:?}: {}", mode, status);
+            assert!(
+                status.len() <= 90,
+                "status too long for {:?}: {}",
+                mode,
+                status
+            );
         }
     }
 
@@ -1699,7 +2427,8 @@ mod tests {
             release_url: "https://example.com/release".to_string(),
             asset_name: "lazyifconfig-v9.9.9-aarch64-apple-darwin.tar.gz".to_string(),
             download_url: "https://example.com/release.tar.gz".to_string(),
-            release_notes: "## Highlights\n- Faster scans\n- Better update UI\n- Route fixes".to_string(),
+            release_notes: "## Highlights\n- Faster scans\n- Better update UI\n- Route fixes"
+                .to_string(),
         });
 
         let backend = TestBackend::new(120, 30);
