@@ -21,7 +21,9 @@ It combines local interface, route, connection, port, and public IP data into a 
 - Network grouping by subnet
 - Active connection list from `netstat -an`
 - Listening port list from `lsof` on macOS and `ss` on Linux
-- Route Inspector with default route summary, destination path lookup, VPN route detection, diagnostics, and raw route output
+- Port and connection detail tabs with focused summaries, process/WHOIS drilldowns, and shared keyboard navigation
+- Route Inspector with default route summary, destination path lookup, VPN route detection, diagnostics, raw route output, and a sortable/filterable route table
+- Tools input modal with muted placeholders, focused-field highlighting, and empty-input warnings
 - Event timeline for interface and public IP changes
 - Raw command output capture inside the app
 - Background GitHub Release check with self-update support
@@ -90,7 +92,9 @@ cargo run --release
 - `S`: save timeline to a timestamped file in current directory (e.g. `lazyifconfig-timeline-YYYYMMDD-HHMMSS.txt`)
 - `g`: Route Inspector
 - `/` and `[` : scroll in list-heavy views
-- In Route Inspector: `Enter` starts destination path lookup, `Tab` switches inspector sections, `/` filters routes, `o` opens raw route output
+- In Route Inspector: `Enter` starts destination path lookup, `Tab` switches inspector sections, `Home`/`End` or `1`-`4` jumps between sections, `/` filters routes, `o` opens raw route output
+- In Ports and Connections: `Tab` switches the detail tabs
+- In Tools: `Tab` moves between input fields and the first field is focused when the modal opens
 
 Some views expose additional actions in the footer, including filtering ports, copying values, WHOIS lookup, and raw output inspection.
 
@@ -107,19 +111,19 @@ cargo test
 GitHub Actions creates a release when a tag matching `v*` is pushed.
 
 ```bash
-git tag v0.2.2
-git push origin v0.2.2
+git tag v0.2.3
+git push origin v0.2.3
 ```
 
 You can also trigger the `Create Release Tag` workflow from GitHub Actions.
-Enter `0.2.2` or `v0.2.2` as the input, and it will:
+Enter `0.2.3` or `v0.2.3` as the input, and it will:
 
 - verify the version matches `Cargo.toml`
 - create an annotated `v*` tag
 - push the tag so the `Release` workflow builds artifacts and publishes the GitHub Release
 
 For crates.io publishing, trigger the `Publish Crate` workflow from GitHub Actions.
-Enter `0.2.2` or `v0.2.2`, and it will:
+Enter `0.2.3` or `v0.2.3`, and it will:
 
 - verify the version matches `Cargo.toml`
 - run `cargo publish --dry-run --locked`

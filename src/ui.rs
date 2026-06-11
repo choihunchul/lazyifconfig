@@ -1140,7 +1140,7 @@ fn render_tools_view(frame: &mut Frame, app: &App, list_area: Rect, details_area
             .map(String::as_str)
             .unwrap_or("");
         let is_focused = idx == app.tools.selected_field_index;
-        let shown = if value.is_empty() {
+        let shown = if value.is_empty() && !is_focused {
             field.placeholder
         } else {
             value
@@ -1318,7 +1318,7 @@ fn render_tools_input_modal(frame: &mut Frame, app: &App) {
             .map(String::as_str)
             .unwrap_or("");
         let is_focused = idx == app.tools.selected_field_index;
-        let shown = if value.is_empty() {
+        let shown = if value.is_empty() && !is_focused {
             field.placeholder
         } else {
             value
@@ -3649,6 +3649,7 @@ mod tests {
         });
 
         assert!(has_focus_highlight);
+        assert!(!rendered.contains("8.8.8.8"));
     }
 
     #[test]
