@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
-use crate::model::{NetworkEvent, NetworkInterface, NetworkSnapshot, Subnet, PublicIpInfo, CommandSourceId, CommandOutput};
+use crate::model::{
+    CommandOutput, CommandSourceId, NetworkEvent, NetworkInterface, NetworkSnapshot, PublicIpInfo,
+    RouteDiagnostic, RouteInspectorSection, RoutePathResult, RouteSortColumn, Subnet,
+};
 use crate::update::{AvailableUpdate, UpdateMessage, UpdateStatus};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,6 +86,7 @@ pub struct App {
     pub update_messages: std::sync::Arc<std::sync::Mutex<Vec<UpdateMessage>>>,
     pub attempted_update_version: Option<String>,
     pub release_notes_viewer: ReleaseNotesViewerState,
+    pub route_inspector: RouteInspectorState,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,6 +106,35 @@ pub struct RawViewerState {
     pub search_active: bool,
     pub search_matches: Vec<SearchMatch>,
     pub current_match_index: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct RouteInspectorState {
+    pub active_section: RouteInspectorSection,
+    pub destination_input: String,
+    pub destination_input_active: bool,
+    pub latest_path_result: Option<RoutePathResult>,
+    pub latest_path_error: Option<String>,
+    pub diagnostics: Vec<RouteDiagnostic>,
+    pub route_filter: String,
+    pub route_filter_active: bool,
+    pub sort_column: RouteSortColumn,
+}
+
+impl Default for RouteInspectorState {
+    fn default() -> Self {
+        Self {
+            active_section: RouteInspectorSection::Summary,
+            destination_input: "8.8.8.8".to_string(),
+            destination_input_active: false,
+            latest_path_result: None,
+            latest_path_error: None,
+            diagnostics: Vec::new(),
+            route_filter: String::new(),
+            route_filter_active: false,
+            sort_column: RouteSortColumn::Destination,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -138,6 +171,7 @@ impl Default for App {
             update_messages: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             attempted_update_version: None,
             release_notes_viewer: ReleaseNotesViewerState::default(),
+            route_inspector: RouteInspectorState::default(),
         }
     }
 }
@@ -189,6 +223,7 @@ impl App {
         }
 
         self.push_generated_events();
+        self.refresh_route_diagnostics();
         self.update_navigation_items();
         self.restore_selection(selected_name.as_deref());
     }
@@ -269,6 +304,41 @@ impl App {
             current_stats.rx_bytes.saturating_sub(previous_stats.rx_bytes) / elapsed,
             current_stats.tx_bytes.saturating_sub(previous_stats.tx_bytes) / elapsed,
         ))
+    }
+
+    pub fn refresh_route_diagnostics(&mut self) {
+        let Some(snapshot) = &self.current_snapshot else {
+            self.route_inspector.diagnostics.clear();
+            return;
+        };
+
+        self.route_inspector.diagnostics =
+            crate::route_inspector::diagnostics::build_route_diagnostics(
+                &snapshot.routes,
+                &snapshot.interfaces,
+            );
+    }
+
+    pub fn select_next_route_section(&mut self) {
+        self.route_inspector.active_section = match self.route_inspector.active_section {
+            RouteInspectorSection::Summary => RouteInspectorSection::PathViewer,
+            RouteInspectorSection::PathViewer => RouteInspectorSection::RouteTable,
+            RouteInspectorSection::RouteTable => RouteInspectorSection::VpnRoutes,
+            RouteInspectorSection::VpnRoutes => RouteInspectorSection::Diagnostics,
+            RouteInspectorSection::Diagnostics => RouteInspectorSection::Summary,
+        };
+        self.details_scroll = 0;
+    }
+
+    pub fn select_previous_route_section(&mut self) {
+        self.route_inspector.active_section = match self.route_inspector.active_section {
+            RouteInspectorSection::Summary => RouteInspectorSection::Diagnostics,
+            RouteInspectorSection::PathViewer => RouteInspectorSection::Summary,
+            RouteInspectorSection::RouteTable => RouteInspectorSection::PathViewer,
+            RouteInspectorSection::VpnRoutes => RouteInspectorSection::RouteTable,
+            RouteInspectorSection::Diagnostics => RouteInspectorSection::VpnRoutes,
+        };
+        self.details_scroll = 0;
     }
 
     pub fn update_navigation_items(&mut self) {
@@ -406,10 +476,28 @@ impl App {
             }
             ViewMode::Routes => {
                 let snapshot = snapshot.unwrap();
-                self.navigation_items = snapshot
+                let query = self.route_inspector.route_filter.to_lowercase();
+                let mut routes: Vec<(usize, &crate::model::RouteEntry)> = snapshot
                     .routes
                     .iter()
                     .enumerate()
+                    .filter(|(_, route)| {
+                        query.is_empty()
+                            || route.destination.to_lowercase().contains(&query)
+                            || route.gateway.to_lowercase().contains(&query)
+                            || route.interface.to_lowercase().contains(&query)
+                    })
+                    .collect();
+
+                match self.route_inspector.sort_column {
+                    RouteSortColumn::Destination => routes.sort_by(|(_, a), (_, b)| a.destination.cmp(&b.destination)),
+                    RouteSortColumn::Gateway => routes.sort_by(|(_, a), (_, b)| a.gateway.cmp(&b.gateway)),
+                    RouteSortColumn::Interface => routes.sort_by(|(_, a), (_, b)| a.interface.cmp(&b.interface)),
+                    RouteSortColumn::Metric => routes.sort_by(|(_, a), (_, b)| a.metric.cmp(&b.metric)),
+                }
+
+                self.navigation_items = routes
+                    .into_iter()
                     .map(|(idx, r)| NavigationItem::Route {
                         destination: r.destination.clone(),
                         gateway: r.gateway.clone(),

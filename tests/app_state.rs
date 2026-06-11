@@ -439,19 +439,19 @@ fn test_routes_navigation() {
     assert_eq!(app.navigation_items.len(), 2);
 
     if let lazyifconfig::app::NavigationItem::Route { destination, gateway, interface, index } = &app.navigation_items[0] {
-        assert_eq!(destination, "default");
-        assert_eq!(gateway, "192.168.0.1");
-        assert_eq!(interface, "en0");
-        assert_eq!(*index, 0);
+        assert_eq!(destination, "10.8.0.0/24");
+        assert_eq!(gateway, "10.8.0.1");
+        assert_eq!(interface, "utun4");
+        assert_eq!(*index, 1);
     } else {
         panic!("Expected NavigationItem::Route at index 0");
     }
 
     if let lazyifconfig::app::NavigationItem::Route { destination, gateway, interface, index } = &app.navigation_items[1] {
-        assert_eq!(destination, "10.8.0.0/24");
-        assert_eq!(gateway, "10.8.0.1");
-        assert_eq!(interface, "utun4");
-        assert_eq!(*index, 1);
+        assert_eq!(destination, "default");
+        assert_eq!(gateway, "192.168.0.1");
+        assert_eq!(interface, "en0");
+        assert_eq!(*index, 0);
     } else {
         panic!("Expected NavigationItem::Route at index 1");
     }
@@ -461,6 +461,72 @@ fn test_routes_navigation() {
     assert_eq!(app.selected_index, 1);
     app.select_next();
     assert_eq!(app.selected_index, 0);
+}
+
+#[test]
+fn route_filter_matches_destination_gateway_and_interface() {
+    let mut app = App::default();
+    app.replace_snapshot(NetworkSnapshot {
+        interfaces: vec![],
+        connections: vec![],
+        listening_ports: vec![],
+        routes: vec![
+            lazyifconfig::model::RouteEntry::new("default", "192.168.0.1", "en0"),
+            lazyifconfig::model::RouteEntry::new("10.8.0.0/24", "link", "utun4"),
+        ],
+        captured_at_secs: 10,
+    });
+
+    app.set_view_mode(lazyifconfig::app::ViewMode::Routes);
+    app.route_inspector.route_filter = "utun".to_string();
+    app.update_navigation_items();
+
+    assert_eq!(app.navigation_items.len(), 1);
+    match &app.navigation_items[0] {
+        lazyifconfig::app::NavigationItem::Route { interface, .. } => assert_eq!(interface, "utun4"),
+        other => panic!("expected route item, got {other:?}"),
+    }
+}
+
+#[test]
+fn route_inspector_sections_cycle_without_leaving_routes_view() {
+    let mut app = App::default();
+
+    assert_eq!(
+        app.route_inspector.active_section,
+        lazyifconfig::model::RouteInspectorSection::Summary
+    );
+
+    app.select_next_route_section();
+    assert_eq!(
+        app.route_inspector.active_section,
+        lazyifconfig::model::RouteInspectorSection::PathViewer
+    );
+
+    app.select_previous_route_section();
+    assert_eq!(
+        app.route_inspector.active_section,
+        lazyifconfig::model::RouteInspectorSection::Summary
+    );
+}
+
+#[test]
+fn route_diagnostics_refresh_when_snapshot_is_replaced() {
+    let mut app = App::default();
+
+    app.replace_snapshot(NetworkSnapshot {
+        interfaces: vec![],
+        connections: vec![],
+        listening_ports: vec![],
+        routes: vec![],
+        captured_at_secs: 10,
+    });
+
+    assert!(app
+        .route_inspector
+        .diagnostics
+        .iter()
+        .any(|item| item.title == "No default route"));
 }
 
 #[test]
@@ -507,4 +573,3 @@ fn test_raw_viewer_search_highlights() {
     assert!(line_content.is_char_boundary(m.end_byte));
     assert_eq!(&line_content[m.start_byte..m.end_byte], "테스트");
 }
-
