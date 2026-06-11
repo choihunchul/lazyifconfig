@@ -1,5 +1,7 @@
 # lazyifconfig
 
+[한국어 README](README.ko.md)
+
 `lazyifconfig` is a terminal UI for inspecting local network state.
 It combines local interface, route, connection, port, and public IP data into a single view for interfaces, subnets, routes, connections, ports, and recent network events.
 
