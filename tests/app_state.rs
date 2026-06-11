@@ -155,7 +155,7 @@ fn tools_input_editing_updates_selected_field() {
     let mut app = App::default();
     app.set_view_mode(lazyifconfig::app::ViewMode::Tools);
 
-    app.tools.start_input_editing();
+    app.tools.open_input_modal();
     app.tools.push_input_char('g');
     app.tools.push_input_char('h');
 
@@ -166,6 +166,23 @@ fn tools_input_editing_updates_selected_field() {
         .unwrap()
         .to_string();
     assert_eq!(value, "gh");
+}
+
+#[test]
+fn tools_input_modal_tracks_editing_scope() {
+    let mut app = App::default();
+    app.set_view_mode(lazyifconfig::app::ViewMode::Tools);
+
+    assert!(!app.tools.input_modal_open);
+    assert!(!app.tools.editing_input);
+
+    app.tools.open_input_modal();
+    assert!(app.tools.input_modal_open);
+    assert!(app.tools.editing_input);
+
+    app.tools.close_input_modal();
+    assert!(!app.tools.input_modal_open);
+    assert!(!app.tools.editing_input);
 }
 
 #[test]

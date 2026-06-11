@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::model::{
-    CommandOutput, CommandSourceId, NetworkEvent, NetworkInterface, NetworkSnapshot, PublicIpInfo,
-    ProcessMetrics, Subnet,
+    CommandOutput, CommandSourceId, NetworkEvent, NetworkInterface, NetworkSnapshot,
+    ProcessMetrics, PublicIpInfo, Subnet,
 };
 use crate::tools::{
     ToolAvailability, ToolExecutionState, ToolId, ToolInput, ToolRegistry, ToolResult,
@@ -103,6 +103,7 @@ pub struct ToolsState {
     pub registry: ToolRegistry,
     pub selected_index: usize,
     pub selected_field_index: usize,
+    pub input_modal_open: bool,
     pub editing_input: bool,
     pub inputs: HashMap<ToolId, ToolInput>,
     pub results: HashMap<ToolId, ToolResult>,
@@ -117,6 +118,7 @@ impl Default for ToolsState {
             registry: ToolRegistry::default(),
             selected_index: 0,
             selected_field_index: 0,
+            input_modal_open: false,
             editing_input: false,
             inputs: HashMap::new(),
             results: HashMap::new(),
@@ -176,10 +178,22 @@ impl ToolsState {
     }
 
     pub fn start_input_editing(&mut self) {
-        self.editing_input = true;
+        self.open_input_modal();
     }
 
     pub fn stop_input_editing(&mut self) {
+        self.close_input_modal();
+    }
+
+    pub fn open_input_modal(&mut self) {
+        if self.selected_tool_is_runnable() && !self.selected_definition().fields.is_empty() {
+            self.input_modal_open = true;
+            self.editing_input = true;
+        }
+    }
+
+    pub fn close_input_modal(&mut self) {
+        self.input_modal_open = false;
         self.editing_input = false;
     }
 

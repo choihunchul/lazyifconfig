@@ -188,7 +188,11 @@ fn get_status_text(app: &App) -> String {
             " q | u check | U update | R notes | [/] | i/n/c/p/e | j/k ".to_string()
         }
         ViewMode::Tools => {
-            " q | / input | Tab field | Enter run | r rerun | [/] scroll | i/n/p/c/g/e ".to_string()
+            if app.tools.input_modal_open {
+                " input modal | type | Backspace | Tab field | Enter run | Esc cancel ".to_string()
+            } else {
+                " q | Enter input | / input | r rerun | [/] scroll | i/n/p/c/g/e ".to_string()
+            }
         }
         _ => {
             format!(
@@ -1199,6 +1203,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if app.raw_viewer.active {
         draw_raw_viewer(frame, app);
     }
+
+    if app.view_mode == ViewMode::Tools && app.tools.input_modal_open {
+        render_tools_input_modal(frame, app);
+    }
 }
 
 fn render_tools_view(frame: &mut Frame, app: &App, list_area: Rect, details_area: Rect) {
@@ -1322,7 +1330,7 @@ fn render_tools_view(frame: &mut Frame, app: &App, list_area: Rect, details_area
                     result_lines.push(Line::from(""));
                 }
             } else if definition.availability == crate::tools::ToolAvailability::Runnable {
-                result_lines.push(Line::from("Press / to edit input, then Enter to run."));
+                result_lines.push(Line::from("Press Enter to edit input, then Enter to run."));
             } else {
                 result_lines.push(Line::from("This tool is planned for a follow-up slice."));
             }
@@ -1349,6 +1357,91 @@ fn render_tools_view(frame: &mut Frame, app: &App, list_area: Rect, details_area
             .block(Block::default().borders(Borders::ALL).title(" Raw Output ")),
         chunks[2],
     );
+}
+
+fn render_tools_input_modal(frame: &mut Frame, app: &App) {
+    let definition = app.tools.selected_definition();
+    if definition.fields.is_empty() {
+        return;
+    }
+
+    let area = centered_rect(62, 46, frame.size());
+    frame.render_widget(Clear, area);
+
+    let inner = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(area);
+
+    let selected_input = app.tools.inputs.get(&definition.id);
+    let mut lines = Vec::new();
+    lines.push(Line::from(Span::styled(
+        definition.description,
+        Style::default().fg(Color::White),
+    )));
+    lines.push(Line::from(""));
+
+    for (idx, field) in definition.fields.iter().enumerate() {
+        let value = selected_input
+            .and_then(|input| input.values.get(field.key))
+            .map(String::as_str)
+            .unwrap_or("");
+        let shown = if value.is_empty() {
+            field.placeholder
+        } else {
+            value
+        };
+        let marker = if idx == app.tools.selected_field_index {
+            ">"
+        } else {
+            " "
+        };
+        let style = if idx == app.tools.selected_field_index {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker} {}: ", field.label), style),
+            Span::styled(shown.to_string(), style),
+        ]));
+    }
+
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: true })
+            .block(Block::default().borders(Borders::ALL).title(" Tool Input ")),
+        area,
+    );
+
+    frame.render_widget(
+        Paragraph::new("Enter run | Tab next field | Esc cancel")
+            .style(Style::default().fg(Color::LightYellow).bg(Color::Black)),
+        inner[1],
+    );
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(vertical[1])[1]
 }
 
 fn render_ports_table(frame: &mut Frame, app: &App, block: Block<'_>, area: Rect) {
@@ -2602,6 +2695,30 @@ mod tests {
         assert!(rendered.contains("Input"));
         assert!(rendered.contains("Results"));
         assert!(rendered.contains("Raw Output"));
+    }
+
+    #[test]
+    fn draw_tools_view_shows_input_modal_when_open() {
+        let mut app = App::default();
+        app.set_view_mode(ViewMode::Tools);
+        app.tools.open_input_modal();
+
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("Tool Input"));
+        assert!(rendered.contains("Target"));
+        assert!(rendered.contains("Enter run"));
+        assert!(rendered.contains("Esc cancel"));
     }
 
     #[test]

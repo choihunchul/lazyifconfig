@@ -759,11 +759,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 if app.view_mode == ViewMode::Tools {
+                    if app.tools.input_modal_open {
+                        match key.code {
+                            KeyCode::Esc => {
+                                app.tools.close_input_modal();
+                            }
+                            KeyCode::Tab => {
+                                app.tools.select_next_field();
+                            }
+                            KeyCode::Backspace => {
+                                app.tools.pop_input_char();
+                            }
+                            KeyCode::Enter => {
+                                app.tools.close_input_modal();
+                                start_selected_tool(&mut app);
+                            }
+                            KeyCode::Char(c) => {
+                                app.tools.push_input_char(c);
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+
                     match key.code {
                         KeyCode::Char('q') | KeyCode::Char('ㅂ') => break,
                         KeyCode::Esc => {
                             app.help_visible = false;
-                            app.tools.stop_input_editing();
                         }
                         KeyCode::Char('?') => {
                             app.help_visible = !app.help_visible;
@@ -812,19 +834,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::Char('/') => {
                             app.help_visible = false;
-                            app.tools.start_input_editing();
+                            app.tools.open_input_modal();
                         }
                         KeyCode::Tab => {
                             app.tools.select_next_field();
-                            app.tools.start_input_editing();
+                            app.tools.open_input_modal();
                         }
-                        KeyCode::Backspace if app.tools.editing_input => {
-                            app.tools.pop_input_char();
+                        KeyCode::Enter => {
+                            app.help_visible = false;
+                            app.tools.open_input_modal();
                         }
-                        KeyCode::Enter if app.tools.editing_input => {
-                            app.tools.stop_input_editing();
-                        }
-                        KeyCode::Enter | KeyCode::Char('r') | KeyCode::Char('ㄱ') => {
+                        KeyCode::Char('r') | KeyCode::Char('ㄱ') => {
                             app.help_visible = false;
                             start_selected_tool(&mut app);
                         }
@@ -833,9 +853,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::Char(']') => {
                             app.tools.raw_scroll = app.tools.raw_scroll.saturating_add(1);
-                        }
-                        KeyCode::Char(c) if app.tools.editing_input => {
-                            app.tools.push_input_char(c);
                         }
                         _ => {}
                     }
