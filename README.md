@@ -21,7 +21,7 @@ It combines local interface, route, connection, port, and public IP data into a 
 - Network grouping by subnet
 - Active connection list from `netstat -an`
 - Listening port list from `lsof` on macOS and `ss` on Linux
-- Route view from `netstat -rn` on macOS and `ip route show` on Linux
+- Route Inspector with default route summary, destination path lookup, VPN route detection, diagnostics, and raw route output
 - Event timeline for interface and public IP changes
 - Raw command output capture inside the app
 - Background GitHub Release check with self-update support
@@ -87,8 +87,9 @@ cargo run --release
 - `c`: connections view
 - `p`: ports view
 - `e`: timeline view
-- `g`: routes view
+- `g`: Route Inspector
 - `/` and `[` : scroll in list-heavy views
+- In Route Inspector: `Enter` starts destination path lookup, `Tab` switches inspector sections, `/` filters routes, `o` opens raw route output
 
 Some views expose additional actions in the footer, including filtering ports, copying values, WHOIS lookup, and raw output inspection.
 
