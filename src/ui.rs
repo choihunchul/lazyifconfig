@@ -1,3 +1,5 @@
+use std::{fs, process::Command, sync::OnceLock};
+
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -11,6 +13,68 @@ use chrono::{DateTime, Local};
 
 pub fn render_title() -> &'static str {
     "lazyifconfig"
+}
+
+fn header_line() -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            "🦥 Lazyifconfig",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" - ", Style::default().fg(Color::DarkGray)),
+        Span::styled(os_display_label(), Style::default().fg(Color::White)),
+    ])
+}
+
+fn os_display_label() -> &'static str {
+    static OS_LABEL: OnceLock<String> = OnceLock::new();
+    OS_LABEL.get_or_init(detect_os_label).as_str()
+}
+
+fn detect_os_label() -> String {
+    if cfg!(target_os = "macos") {
+        let version = Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()
+            .and_then(|output| {
+                if output.status.success() {
+                    String::from_utf8(output.stdout).ok()
+                } else {
+                    None
+                }
+            })
+            .map(|version| version.trim().to_string())
+            .filter(|version| !version.is_empty());
+
+        if let Some(version) = version {
+            format!("macOS {version}")
+        } else {
+            "macOS".to_string()
+        }
+    } else if cfg!(target_os = "linux") {
+        linux_os_label().unwrap_or_else(|| "Linux".to_string())
+    } else {
+        std::env::consts::OS.to_string()
+    }
+}
+
+fn linux_os_label() -> Option<String> {
+    let os_release = fs::read_to_string("/etc/os-release").ok()?;
+    let pretty_name = os_release_value(&os_release, "PRETTY_NAME");
+    let version = os_release_value(&os_release, "VERSION_ID");
+
+    pretty_name
+        .or_else(|| version.map(|version| format!("Linux {version}")))
+        .filter(|label| !label.is_empty())
+}
+
+fn os_release_value(contents: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}=");
+    contents.lines().find_map(|line| {
+        let value = line.strip_prefix(&prefix)?;
+        Some(value.trim_matches('"').to_string())
+    })
 }
 
 fn get_active_command(view_mode: ViewMode) -> &'static str {
@@ -68,6 +132,36 @@ fn get_status_text(app: &App) -> String {
     }
 }
 
+fn view_tabs(view_mode: ViewMode) -> Line<'static> {
+    let tabs = [
+        (ViewMode::Interface, "Interface(i)"),
+        (ViewMode::Network, "Network(n)"),
+        (ViewMode::Ports, "Port(p)"),
+        (ViewMode::Connections, "Connection(c)"),
+        (ViewMode::Routes, "Route(g)"),
+        (ViewMode::Timeline, "Timeline(e)"),
+    ];
+
+    let mut spans = Vec::new();
+    for (idx, (mode, label)) in tabs.iter().enumerate() {
+        if idx > 0 {
+            spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
+        }
+
+        let style = if *mode == view_mode {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        spans.push(Span::styled(format!(" {label} "), style));
+    }
+
+    Line::from(spans)
+}
+
 pub fn draw(frame: &mut Frame, app: &App) {
     // When in port filter mode, allocate an extra line for the filter bar
     let filter_bar_height: u16 = if app.port_filter_active || (app.view_mode == ViewMode::Ports && !app.port_filter.is_empty()) { 1 } else { 0 };
@@ -76,18 +170,28 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(3),                    // 0: Top pane
-            Constraint::Length(command_panel_height), // 1: Active Command Panel
-            Constraint::Length(5),                 // 2: Recent Events Panel
-            Constraint::Length(filter_bar_height), // 3: Filter Bar
-            Constraint::Length(1),                 // 4: Status Bar
+            Constraint::Length(1),                 // 0: App Header
+            Constraint::Length(1),                 // 1: View Tabs
+            Constraint::Min(3),                    // 2: Top pane
+            Constraint::Length(command_panel_height), // 3: Active Command Panel
+            Constraint::Length(5),                 // 4: Recent Events Panel
+            Constraint::Length(filter_bar_height), // 5: Filter Bar
+            Constraint::Length(1),                 // 6: Status Bar
         ])
         .split(frame.size());
+
+    let header = Paragraph::new(header_line())
+        .style(Style::default().bg(Color::Rgb(24, 24, 24)));
+    frame.render_widget(header, chunks[0]);
+
+    let tabs = Paragraph::new(view_tabs(app.view_mode))
+        .style(Style::default().bg(Color::Rgb(32, 32, 32)));
+    frame.render_widget(tabs, chunks[1]);
 
     let top_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-        .split(top_chunks_area(chunks[0]));
+        .split(top_chunks_area(chunks[2]));
 
     // Helper to extract size safely (compatible with older/newer ratatui area/size)
     fn top_chunks_area(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
@@ -666,7 +770,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     // 3. Active Command Panel
     let (command_lines, command_style) = build_command_panel(app);
     let command_p = Paragraph::new(command_lines).style(command_style).wrap(Wrap { trim: true });
-    frame.render_widget(command_p, chunks[1]);
+    frame.render_widget(command_p, chunks[3]);
 
     // 4. Event Panel
     let event_block = Block::default()
@@ -687,7 +791,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         event_items.push(ListItem::new(format!("[{}] {}", time_str, event.message)).style(item_style));
     }
     let event_list = List::new(event_items).block(event_block);
-    frame.render_widget(event_list, chunks[2]);
+    frame.render_widget(event_list, chunks[4]);
 
     // 5. Filter Bar (Ports view only)
     if filter_bar_height > 0 {
@@ -702,11 +806,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
             Style::default().bg(Color::DarkGray).fg(Color::White)
         };
         let filter_p = Paragraph::new(filter_text).style(filter_style);
-        frame.render_widget(filter_p, chunks[3]);
+        frame.render_widget(filter_p, chunks[5]);
     }
 
     // 6. Status Bar
-    let status_idx = 4;
+    let status_idx = 6;
     let status_text = get_status_text(app);
     let status_p = Paragraph::new(status_text)
         .style(Style::default().bg(Color::Blue).fg(Color::White));
@@ -1301,6 +1405,52 @@ mod tests {
 
         assert!(rendered.contains("o[output]"));
         assert!(rendered.contains("?[help]"));
+    }
+
+    #[test]
+    fn test_top_tabs_show_view_shortcuts() {
+        let mut app = App::default();
+        app.view_mode = ViewMode::Ports;
+
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("Interface(i)"));
+        assert!(rendered.contains("Network(n)"));
+        assert!(rendered.contains("Port(p)"));
+        assert!(rendered.contains("Connection(c)"));
+        assert!(rendered.contains("Route(g)"));
+        assert!(rendered.contains("Timeline(e)"));
+    }
+
+    #[test]
+    fn test_top_header_shows_app_name_and_os() {
+        let app = App::default();
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("🦥"));
+        assert!(rendered.contains("Lazyifconfig"));
+        assert!(rendered.contains(" - "));
+        assert!(rendered.contains(os_display_label()));
     }
 
     #[test]
