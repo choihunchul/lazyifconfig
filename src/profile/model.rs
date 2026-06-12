@@ -13,6 +13,10 @@ impl ProfileConfig {
     pub fn from_toml_str(input: &str) -> Result<Self, String> {
         toml::from_str(input).map_err(|error| error.to_string())
     }
+
+    pub fn to_toml_string(&self) -> Result<String, String> {
+        toml::to_string_pretty(self).map_err(|error| error.to_string())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]

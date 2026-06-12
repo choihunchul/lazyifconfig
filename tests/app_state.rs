@@ -1126,3 +1126,40 @@ role = "gateway"
     );
     assert_eq!(app.profile_label_for_ip("8.8.8.8"), None);
 }
+
+#[test]
+fn profile_switcher_opens_and_selects_next_profile() {
+    let mut app = App {
+        available_profile_names: vec![
+            "default".to_string(),
+            "home".to_string(),
+            "office".to_string(),
+        ],
+        ..App::default()
+    };
+
+    app.open_profile_switcher();
+    assert!(app.profile_switcher.active);
+    assert_eq!(app.profile_switcher.selected_index, 0);
+
+    app.profile_switcher_next();
+    app.profile_switcher_next();
+    assert_eq!(app.selected_profile_switcher_name(), Some("office"));
+}
+
+#[test]
+fn profile_editor_builds_profile_config_from_fields() {
+    let mut app = App::default();
+
+    app.open_new_profile_editor();
+    app.profile_editor.name = "office".to_string();
+    app.profile_editor.description = "Office network".to_string();
+
+    let profile = app.profile_editor_config().expect("profile config");
+
+    assert_eq!(profile.profile.name, "office");
+    assert_eq!(
+        profile.profile.description.as_deref(),
+        Some("Office network")
+    );
+}

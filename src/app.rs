@@ -6,7 +6,7 @@ use crate::model::{
     ProcessMetrics, PublicIpInfo, RouteDiagnostic, RouteEntry, RouteInspectorSection,
     RoutePathResult, RouteSortColumn, Subnet,
 };
-use crate::profile::ProfileConfig;
+use crate::profile::{ProfileAutoDetect, ProfileConfig, ProfileDocument};
 use crate::tools::{
     validate_tool_input, ToolAvailability, ToolExecutionState, ToolId, ToolInput, ToolRegistry,
     ToolResult,
@@ -330,6 +330,9 @@ pub struct App {
     pub active_profile_name: String,
     pub active_profile: Option<ProfileConfig>,
     pub profile_warning: Option<String>,
+    pub available_profile_names: Vec<String>,
+    pub profile_switcher: ProfileSwitcherState,
+    pub profile_editor: ProfileEditorState,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -337,6 +340,47 @@ pub struct SearchMatch {
     pub line_index: usize,
     pub start_byte: usize,
     pub end_byte: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProfileSwitcherState {
+    pub active: bool,
+    pub selected_index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProfileEditorMode {
+    New,
+    Edit,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfileEditorState {
+    pub active: bool,
+    pub mode: ProfileEditorMode,
+    pub selected_field_index: usize,
+    pub name: String,
+    pub description: String,
+    pub message: Option<String>,
+    pub networks: Vec<crate::profile::ProfileNetwork>,
+    pub hosts: Vec<crate::profile::ProfileHost>,
+    pub targets: Vec<crate::profile::ProfileTarget>,
+}
+
+impl Default for ProfileEditorState {
+    fn default() -> Self {
+        Self {
+            active: false,
+            mode: ProfileEditorMode::New,
+            selected_field_index: 0,
+            name: String::new(),
+            description: String::new(),
+            message: None,
+            networks: Vec::new(),
+            hosts: Vec::new(),
+            targets: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -432,6 +476,9 @@ impl Default for App {
             active_profile_name: "default".to_string(),
             active_profile: None,
             profile_warning: None,
+            available_profile_names: vec!["default".to_string()],
+            profile_switcher: ProfileSwitcherState::default(),
+            profile_editor: ProfileEditorState::default(),
         }
     }
 }
@@ -474,6 +521,128 @@ impl App {
         } else {
             ip.to_string()
         }
+    }
+
+    pub fn open_profile_switcher(&mut self) {
+        self.profile_switcher.active = true;
+        self.profile_switcher.selected_index = self
+            .available_profile_names
+            .iter()
+            .position(|name| name == &self.active_profile_name)
+            .unwrap_or(0);
+    }
+
+    pub fn close_profile_switcher(&mut self) {
+        self.profile_switcher.active = false;
+    }
+
+    pub fn profile_switcher_next(&mut self) {
+        if !self.available_profile_names.is_empty() {
+            self.profile_switcher.selected_index =
+                (self.profile_switcher.selected_index + 1) % self.available_profile_names.len();
+        }
+    }
+
+    pub fn profile_switcher_previous(&mut self) {
+        if !self.available_profile_names.is_empty() {
+            self.profile_switcher.selected_index =
+                (self.profile_switcher.selected_index + self.available_profile_names.len() - 1)
+                    % self.available_profile_names.len();
+        }
+    }
+
+    pub fn selected_profile_switcher_name(&self) -> Option<&str> {
+        self.available_profile_names
+            .get(self.profile_switcher.selected_index)
+            .map(String::as_str)
+    }
+
+    pub fn open_new_profile_editor(&mut self) {
+        self.profile_switcher.active = false;
+        self.profile_editor = ProfileEditorState {
+            active: true,
+            mode: ProfileEditorMode::New,
+            name: "new-profile".to_string(),
+            ..ProfileEditorState::default()
+        };
+    }
+
+    pub fn open_edit_profile_editor(&mut self) {
+        self.profile_switcher.active = false;
+        let profile = self.active_profile.clone();
+        self.profile_editor = ProfileEditorState {
+            active: true,
+            mode: ProfileEditorMode::Edit,
+            name: profile
+                .as_ref()
+                .map(|profile| profile.profile.name.clone())
+                .unwrap_or_else(|| self.active_profile_name.clone()),
+            description: profile
+                .as_ref()
+                .and_then(|profile| profile.profile.description.clone())
+                .unwrap_or_default(),
+            networks: profile
+                .as_ref()
+                .map(|profile| profile.networks.clone())
+                .unwrap_or_default(),
+            hosts: profile
+                .as_ref()
+                .map(|profile| profile.hosts.clone())
+                .unwrap_or_default(),
+            targets: profile
+                .as_ref()
+                .map(|profile| profile.targets.clone())
+                .unwrap_or_default(),
+            ..ProfileEditorState::default()
+        };
+    }
+
+    pub fn close_profile_editor(&mut self) {
+        self.profile_editor.active = false;
+    }
+
+    pub fn profile_editor_next_field(&mut self) {
+        self.profile_editor.selected_field_index =
+            (self.profile_editor.selected_field_index + 1) % 2;
+    }
+
+    pub fn profile_editor_push_char(&mut self, c: char) {
+        if matches!(c, '\n' | '\r') {
+            return;
+        }
+        match self.profile_editor.selected_field_index {
+            0 => self.profile_editor.name.push(c),
+            _ => self.profile_editor.description.push(c),
+        }
+    }
+
+    pub fn profile_editor_pop_char(&mut self) {
+        match self.profile_editor.selected_field_index {
+            0 => {
+                self.profile_editor.name.pop();
+            }
+            _ => {
+                self.profile_editor.description.pop();
+            }
+        }
+    }
+
+    pub fn profile_editor_config(&self) -> Result<ProfileConfig, String> {
+        let name = self.profile_editor.name.trim();
+        if name.is_empty() {
+            return Err("Profile name is required.".to_string());
+        }
+        Ok(ProfileConfig {
+            profile: ProfileDocument {
+                name: name.to_string(),
+                description: (!self.profile_editor.description.trim().is_empty())
+                    .then(|| self.profile_editor.description.trim().to_string()),
+                auto_detect: ProfileAutoDetect::Prompt,
+            },
+            networks: self.profile_editor.networks.clone(),
+            hosts: self.profile_editor.hosts.clone(),
+            targets: self.profile_editor.targets.clone(),
+        })
     }
 
     pub fn replace_snapshot(&mut self, mut snapshot: NetworkSnapshot) {

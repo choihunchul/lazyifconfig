@@ -34,8 +34,8 @@ use details::{
     render_route_inspector_details, resolve_connection_interface, route_family_label,
 };
 use overlays::{
-    build_command_panel, command_panel_height, draw_help, draw_raw_viewer,
-    draw_release_notes_viewer,
+    build_command_panel, command_panel_height, draw_help, draw_profile_editor,
+    draw_profile_switcher, draw_raw_viewer, draw_release_notes_viewer,
 };
 use tables::{format_endpoint, render_connections_table, render_ports_table, render_routes_table};
 use tools::{render_tools_input_modal, render_tools_view};
@@ -256,15 +256,16 @@ fn get_status_text(app: &App) -> String {
             if app.tools.input_modal_open {
                 " input modal | type | Backspace | Tab field | Enter run | Esc cancel ".to_string()
             } else if app.tools.selected_tool_is_dns_lookup() {
-                " q | Enter input | / input | r rerun | o raw | [/] scroll | i/n/p/c/g/e "
+                " q | P profiles | Enter input | / input | r rerun | o raw | [/] scroll | i/n/p/c/g/e "
                     .to_string()
             } else {
-                " q | Enter input | / input | r rerun | [/] scroll | i/n/p/c/g/e ".to_string()
+                " q | P profiles | Enter input | / input | r rerun | [/] scroll | i/n/p/c/g/e "
+                    .to_string()
             }
         }
         _ => {
             format!(
-                " q | r | u check | U update | R notes | a:{} | i/n/c/p/e/g ",
+                " q | P profiles | r | u check | U update | R notes | a:{} | i/n/c/p/e/g ",
                 if app.show_all { "on" } else { "off" }
             )
         }
@@ -1109,6 +1110,14 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     if app.release_notes_viewer.active {
         draw_release_notes_viewer(frame, app);
+    }
+
+    if app.profile_switcher.active {
+        draw_profile_switcher(frame, app);
+    }
+
+    if app.profile_editor.active {
+        draw_profile_editor(frame, app);
     }
 
     if app.raw_viewer.active {

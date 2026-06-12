@@ -348,6 +348,146 @@ pub(super) fn draw_release_notes_viewer(frame: &mut Frame, app: &App) {
     frame.render_widget(footer, vertical[2]);
 }
 
+pub(super) fn draw_profile_switcher(frame: &mut Frame, app: &App) {
+    let area = get_centered_rect(48, 48, frame.size());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(" Profiles ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::LightCyan))
+        .style(Style::default().bg(Color::Black).fg(Color::White));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .split(inner);
+
+    let items = app
+        .available_profile_names
+        .iter()
+        .enumerate()
+        .map(|(idx, name)| {
+            let active = name == app.active_profile_name();
+            let marker = if active { "*" } else { " " };
+            let style = if idx == app.profile_switcher.selected_index {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else if active {
+                Style::default()
+                    .fg(Color::LightCyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            ListItem::new(format!("{marker} {name}")).style(style)
+        })
+        .collect::<Vec<_>>();
+
+    frame.render_widget(List::new(items), chunks[0]);
+
+    let footer = Paragraph::new("Enter change | n add | e edit | Esc close")
+        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    frame.render_widget(footer, chunks[1]);
+}
+
+pub(super) fn draw_profile_editor(frame: &mut Frame, app: &App) {
+    let area = get_centered_rect(62, 48, frame.size());
+    frame.render_widget(Clear, area);
+
+    let title = match app.profile_editor.mode {
+        crate::app::ProfileEditorMode::New => " Add Profile ",
+        crate::app::ProfileEditorMode::Edit => " Edit Profile ",
+    };
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::LightCyan))
+        .style(Style::default().bg(Color::Black).fg(Color::White));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Length(2),
+            Constraint::Length(2),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+
+    let field_style = |index| {
+        if app.profile_editor.selected_field_index == index {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        }
+    };
+
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                "Name",
+                Style::default()
+                    .fg(Color::LightCyan)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                format!("{}▌", app.profile_editor.name),
+                field_style(0),
+            )),
+        ]),
+        chunks[0],
+    );
+
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                "Description",
+                Style::default()
+                    .fg(Color::LightCyan)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                format!("{}▌", app.profile_editor.description),
+                field_style(1),
+            )),
+        ]),
+        chunks[1],
+    );
+
+    let counts = format!(
+        "Networks: {} | Hosts: {} | Targets: {}",
+        app.profile_editor.networks.len(),
+        app.profile_editor.hosts.len(),
+        app.profile_editor.targets.len()
+    );
+    frame.render_widget(
+        Paragraph::new(counts).style(Style::default().fg(Color::DarkGray)),
+        chunks[2],
+    );
+
+    if let Some(message) = &app.profile_editor.message {
+        frame.render_widget(
+            Paragraph::new(message.clone()).style(Style::default().fg(Color::Yellow)),
+            chunks[3],
+        );
+    }
+
+    let footer = Paragraph::new("Tab field | Enter save | Esc close")
+        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    frame.render_widget(footer, chunks[4]);
+}
+
 fn get_centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)

@@ -72,6 +72,53 @@ async fn run_tools_cli_command(args: &[String]) -> Result<String, String> {
     Ok(lazyifconfig::tools::format_tool_result_plaintext(&result))
 }
 
+fn refresh_profile_names(app: &mut App) {
+    let base = lazyifconfig::profile::config_base_dir();
+    match lazyifconfig::profile::list_profile_names_for_base(&base) {
+        Ok(names) => app.available_profile_names = names,
+        Err(error) => app.set_profile_warning(format!("profile list failed: {error}")),
+    }
+}
+
+fn load_profile_by_name(app: &mut App, name: &str) {
+    let base = lazyifconfig::profile::config_base_dir();
+    let path = lazyifconfig::profile::profile_path_for_base(&base, name);
+    if path.exists() {
+        match lazyifconfig::profile::load_profile_from_path(&path) {
+            Ok(profile) => app.set_active_profile(name.to_string(), Some(profile)),
+            Err(error) => {
+                app.active_profile_name = name.to_string();
+                app.active_profile = None;
+                app.set_profile_warning(format!("profile load failed: {error}"));
+            }
+        }
+    } else {
+        app.set_active_profile(name.to_string(), None);
+    }
+}
+
+fn save_profile_editor(app: &mut App) {
+    let profile = match app.profile_editor_config() {
+        Ok(profile) => profile,
+        Err(error) => {
+            app.profile_editor.message = Some(error);
+            return;
+        }
+    };
+    let base = lazyifconfig::profile::config_base_dir();
+    match lazyifconfig::profile::save_profile_to_base(&base, &profile) {
+        Ok(_) => {
+            let name = profile.profile.name.clone();
+            app.set_active_profile(name, Some(profile));
+            refresh_profile_names(app);
+            app.close_profile_editor();
+        }
+        Err(error) => {
+            app.profile_editor.message = Some(error);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli_args = std::env::args().skip(1).collect::<Vec<_>>();
@@ -111,9 +158,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::default();
-    if let Some(profile_name) = profile_override {
-        app.active_profile_name = profile_name;
-    }
+    refresh_profile_names(&mut app);
+    let active_profile_name = profile_override.unwrap_or_else(|| app.active_profile_name.clone());
+    load_profile_by_name(&mut app, &active_profile_name);
     let _ = tick_update(&mut app);
 
     let mut last_tick = std::time::Instant::now();
@@ -132,10 +179,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Event::Paste(text) => {
                     if app.view_mode == ViewMode::Tools && app.tools.input_modal_open {
                         app.tools.push_input_text(&text);
+                    } else if app.profile_editor.active {
+                        for c in text.lines().next().unwrap_or("").chars() {
+                            app.profile_editor_push_char(c);
+                        }
                     }
                     continue;
                 }
                 Event::Key(key) => {
+                    if app.profile_editor.active {
+                        match key.code {
+                            KeyCode::Esc => app.close_profile_editor(),
+                            KeyCode::Tab => app.profile_editor_next_field(),
+                            KeyCode::Backspace => app.profile_editor_pop_char(),
+                            KeyCode::Enter => save_profile_editor(&mut app),
+                            KeyCode::Char(c) => app.profile_editor_push_char(c),
+                            _ => {}
+                        }
+                        continue;
+                    }
+
+                    if app.profile_switcher.active {
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Char('q') => app.close_profile_switcher(),
+                            KeyCode::Char('j') | KeyCode::Down => app.profile_switcher_next(),
+                            KeyCode::Char('k') | KeyCode::Up => app.profile_switcher_previous(),
+                            KeyCode::Char('n') => app.open_new_profile_editor(),
+                            KeyCode::Char('e') => {
+                                if let Some(name) =
+                                    app.selected_profile_switcher_name().map(str::to_string)
+                                {
+                                    load_profile_by_name(&mut app, &name);
+                                    app.open_edit_profile_editor();
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if let Some(name) =
+                                    app.selected_profile_switcher_name().map(str::to_string)
+                                {
+                                    load_profile_by_name(&mut app, &name);
+                                }
+                                app.close_profile_switcher();
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+
                     // --- Raw viewer mode: intercept all input ---
                     if app.raw_viewer.active {
                         if app.raw_viewer.search_active {
@@ -429,6 +519,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             KeyCode::Char('?') => {
                                 app.help_visible = !app.help_visible;
                             }
+                            KeyCode::Char('P') => {
+                                refresh_profile_names(&mut app);
+                                app.open_profile_switcher();
+                            }
                             KeyCode::Char('i') | KeyCode::Char('ㅑ') => {
                                 app.help_visible = false;
                                 app.set_view_mode(ViewMode::Interface);
@@ -518,6 +612,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::Char('?') => {
                             app.help_visible = !app.help_visible;
+                        }
+                        KeyCode::Char('P') => {
+                            refresh_profile_names(&mut app);
+                            app.open_profile_switcher();
                         }
                         KeyCode::Char('o') | KeyCode::Char('ㅐ') => {
                             app.help_visible = false;
