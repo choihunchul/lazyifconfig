@@ -193,6 +193,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             KeyCode::Tab => app.profile_editor_next_field(),
                             KeyCode::Backspace => app.profile_editor_pop_char(),
                             KeyCode::Enter => save_profile_editor(&mut app),
+                            KeyCode::Char('j') | KeyCode::Down
+                                if app.profile_editor.selected_field_index == 2 =>
+                            {
+                                app.profile_editor_select_next_candidate();
+                            }
+                            KeyCode::Char('k') | KeyCode::Up
+                                if app.profile_editor.selected_field_index == 2 =>
+                            {
+                                app.profile_editor_select_previous_candidate();
+                            }
+                            KeyCode::Char('a') if app.profile_editor.selected_field_index == 2 => {
+                                app.profile_editor_add_selected_candidate();
+                            }
                             KeyCode::Char(c) => app.profile_editor_push_char(c),
                             _ => {}
                         }

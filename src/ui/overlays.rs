@@ -417,7 +417,8 @@ pub(super) fn draw_profile_editor(frame: &mut Frame, app: &App) {
             Constraint::Length(2),
             Constraint::Length(2),
             Constraint::Length(2),
-            Constraint::Min(1),
+            Constraint::Min(5),
+            Constraint::Length(2),
             Constraint::Length(1),
         ])
         .split(inner);
@@ -476,16 +477,56 @@ pub(super) fn draw_profile_editor(frame: &mut Frame, app: &App) {
         chunks[2],
     );
 
+    let candidate_items = app
+        .profile_editor
+        .detected_candidates
+        .iter()
+        .enumerate()
+        .map(|(idx, candidate)| {
+            let style = if app.profile_editor.selected_field_index == 2
+                && idx == app.profile_editor.selected_candidate_index
+            {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            ListItem::new(candidate.label.clone()).style(style)
+        })
+        .collect::<Vec<_>>();
+
+    let candidates = if candidate_items.is_empty() {
+        List::new(vec![
+            ListItem::new("No detected candidates").style(Style::default().fg(Color::DarkGray))
+        ])
+    } else {
+        List::new(candidate_items)
+    }
+    .block(
+        Block::default()
+            .title(" Detected candidates ")
+            .borders(Borders::ALL)
+            .border_style(if app.profile_editor.selected_field_index == 2 {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            }),
+    );
+    frame.render_widget(candidates, chunks[3]);
+
     if let Some(message) = &app.profile_editor.message {
         frame.render_widget(
             Paragraph::new(message.clone()).style(Style::default().fg(Color::Yellow)),
-            chunks[3],
+            chunks[4],
         );
     }
 
-    let footer = Paragraph::new("Tab field | Enter save | Esc close")
-        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
-    frame.render_widget(footer, chunks[4]);
+    let footer =
+        Paragraph::new("Tab field | candidates: j/k select, a add | Enter save | Esc close")
+            .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    frame.render_widget(footer, chunks[5]);
 }
 
 fn get_centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {

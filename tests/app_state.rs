@@ -1163,3 +1163,93 @@ fn profile_editor_builds_profile_config_from_fields() {
         Some("Office network")
     );
 }
+
+#[test]
+fn profile_editor_detects_network_gateway_and_remote_targets() {
+    let mut app = App::default();
+    app.replace_snapshot(NetworkSnapshot {
+        interfaces: vec![NetworkInterface {
+            name: "en0".to_string(),
+            network_kind: lazyifconfig::model::NetworkKind::Lan,
+            interface_type: InterfaceType::WifiOrEthernet,
+            status: InterfaceStatus::Up,
+            ipv4: vec![InterfaceAddress {
+                value: "10.20.4.82".to_string(),
+                prefix_len: Some(16),
+                gateway: Some("10.20.1.1".to_string()),
+            }],
+            ipv6: vec![],
+            mac_address: None,
+            mtu: None,
+            stats: None,
+        }],
+        connections: vec![active_connection(
+            "tcp",
+            "10.20.4.82",
+            "53000",
+            "10.20.8.15",
+            "443",
+            Some("ESTABLISHED"),
+        )],
+        listening_ports: vec![],
+        routes: vec![],
+        captured_at_secs: 10,
+    });
+
+    app.open_new_profile_editor();
+
+    assert!(app
+        .profile_editor
+        .detected_candidates
+        .iter()
+        .any(|candidate| candidate.label == "Network 10.20.0.0/16"));
+    assert!(app
+        .profile_editor
+        .detected_candidates
+        .iter()
+        .any(|candidate| candidate.label == "Gateway 10.20.1.1"));
+    assert!(app
+        .profile_editor
+        .detected_candidates
+        .iter()
+        .any(|candidate| candidate.label == "Target 10.20.8.15:443"));
+}
+
+#[test]
+fn profile_editor_adds_selected_detected_candidate() {
+    let mut app = App::default();
+    app.replace_snapshot(NetworkSnapshot {
+        interfaces: vec![NetworkInterface {
+            name: "en0".to_string(),
+            network_kind: lazyifconfig::model::NetworkKind::Lan,
+            interface_type: InterfaceType::WifiOrEthernet,
+            status: InterfaceStatus::Up,
+            ipv4: vec![InterfaceAddress {
+                value: "10.20.4.82".to_string(),
+                prefix_len: Some(16),
+                gateway: Some("10.20.1.1".to_string()),
+            }],
+            ipv6: vec![],
+            mac_address: None,
+            mtu: None,
+            stats: None,
+        }],
+        connections: vec![],
+        listening_ports: vec![],
+        routes: vec![],
+        captured_at_secs: 10,
+    });
+
+    app.open_new_profile_editor();
+    app.profile_editor.selected_candidate_index = app
+        .profile_editor
+        .detected_candidates
+        .iter()
+        .position(|candidate| candidate.label == "Network 10.20.0.0/16")
+        .unwrap();
+
+    app.profile_editor_add_selected_candidate();
+
+    assert_eq!(app.profile_editor.networks.len(), 1);
+    assert_eq!(app.profile_editor.networks[0].cidr, "10.20.0.0/16");
+}

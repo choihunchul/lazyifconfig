@@ -6,7 +6,9 @@ use crate::model::{
     ProcessMetrics, PublicIpInfo, RouteDiagnostic, RouteEntry, RouteInspectorSection,
     RoutePathResult, RouteSortColumn, Subnet,
 };
-use crate::profile::{ProfileAutoDetect, ProfileConfig, ProfileDocument};
+use crate::profile::{
+    ProfileAutoDetect, ProfileConfig, ProfileDocument, ProfileHost, ProfileNetwork, ProfileTarget,
+};
 use crate::tools::{
     validate_tool_input, ToolAvailability, ToolExecutionState, ToolId, ToolInput, ToolRegistry,
     ToolResult,
@@ -355,16 +357,31 @@ pub enum ProfileEditorMode {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProfileEditorCandidateValue {
+    Network(ProfileNetwork),
+    Host(ProfileHost),
+    Target(ProfileTarget),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfileEditorCandidate {
+    pub label: String,
+    pub value: ProfileEditorCandidateValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProfileEditorState {
     pub active: bool,
     pub mode: ProfileEditorMode,
     pub selected_field_index: usize,
+    pub selected_candidate_index: usize,
     pub name: String,
     pub description: String,
     pub message: Option<String>,
     pub networks: Vec<crate::profile::ProfileNetwork>,
     pub hosts: Vec<crate::profile::ProfileHost>,
     pub targets: Vec<crate::profile::ProfileTarget>,
+    pub detected_candidates: Vec<ProfileEditorCandidate>,
 }
 
 impl Default for ProfileEditorState {
@@ -373,12 +390,14 @@ impl Default for ProfileEditorState {
             active: false,
             mode: ProfileEditorMode::New,
             selected_field_index: 0,
+            selected_candidate_index: 0,
             name: String::new(),
             description: String::new(),
             message: None,
             networks: Vec::new(),
             hosts: Vec::new(),
             targets: Vec::new(),
+            detected_candidates: Vec::new(),
         }
     }
 }
@@ -559,18 +578,20 @@ impl App {
 
     pub fn open_new_profile_editor(&mut self) {
         self.profile_switcher.active = false;
-        self.profile_editor = ProfileEditorState {
+        let mut editor = ProfileEditorState {
             active: true,
             mode: ProfileEditorMode::New,
             name: "new-profile".to_string(),
             ..ProfileEditorState::default()
         };
+        editor.detected_candidates = self.detect_profile_editor_candidates();
+        self.profile_editor = editor;
     }
 
     pub fn open_edit_profile_editor(&mut self) {
         self.profile_switcher.active = false;
         let profile = self.active_profile.clone();
-        self.profile_editor = ProfileEditorState {
+        let mut editor = ProfileEditorState {
             active: true,
             mode: ProfileEditorMode::Edit,
             name: profile
@@ -595,6 +616,8 @@ impl App {
                 .unwrap_or_default(),
             ..ProfileEditorState::default()
         };
+        editor.detected_candidates = self.detect_profile_editor_candidates();
+        self.profile_editor = editor;
     }
 
     pub fn close_profile_editor(&mut self) {
@@ -603,7 +626,25 @@ impl App {
 
     pub fn profile_editor_next_field(&mut self) {
         self.profile_editor.selected_field_index =
-            (self.profile_editor.selected_field_index + 1) % 2;
+            (self.profile_editor.selected_field_index + 1) % 3;
+    }
+
+    pub fn profile_editor_select_next_candidate(&mut self) {
+        if !self.profile_editor.detected_candidates.is_empty() {
+            self.profile_editor.selected_candidate_index =
+                (self.profile_editor.selected_candidate_index + 1)
+                    % self.profile_editor.detected_candidates.len();
+        }
+    }
+
+    pub fn profile_editor_select_previous_candidate(&mut self) {
+        if !self.profile_editor.detected_candidates.is_empty() {
+            self.profile_editor.selected_candidate_index =
+                (self.profile_editor.selected_candidate_index
+                    + self.profile_editor.detected_candidates.len()
+                    - 1)
+                    % self.profile_editor.detected_candidates.len();
+        }
     }
 
     pub fn profile_editor_push_char(&mut self, c: char) {
@@ -612,8 +653,55 @@ impl App {
         }
         match self.profile_editor.selected_field_index {
             0 => self.profile_editor.name.push(c),
-            _ => self.profile_editor.description.push(c),
+            1 => self.profile_editor.description.push(c),
+            _ => {}
         }
+    }
+
+    pub fn profile_editor_add_selected_candidate(&mut self) {
+        let Some(candidate) = self
+            .profile_editor
+            .detected_candidates
+            .get(self.profile_editor.selected_candidate_index)
+            .cloned()
+        else {
+            self.profile_editor.message = Some("No detected candidate selected.".to_string());
+            return;
+        };
+
+        match candidate.value {
+            ProfileEditorCandidateValue::Network(network) => {
+                if !self
+                    .profile_editor
+                    .networks
+                    .iter()
+                    .any(|existing| existing.cidr == network.cidr)
+                {
+                    self.profile_editor.networks.push(network);
+                }
+            }
+            ProfileEditorCandidateValue::Host(host) => {
+                if !self
+                    .profile_editor
+                    .hosts
+                    .iter()
+                    .any(|existing| existing.ip == host.ip)
+                {
+                    self.profile_editor.hosts.push(host);
+                }
+            }
+            ProfileEditorCandidateValue::Target(target) => {
+                if !self
+                    .profile_editor
+                    .targets
+                    .iter()
+                    .any(|existing| existing.host == target.host && existing.port == target.port)
+                {
+                    self.profile_editor.targets.push(target);
+                }
+            }
+        }
+        self.profile_editor.message = Some(format!("Added {}", candidate.label));
     }
 
     pub fn profile_editor_pop_char(&mut self) {
@@ -621,9 +709,10 @@ impl App {
             0 => {
                 self.profile_editor.name.pop();
             }
-            _ => {
+            1 => {
                 self.profile_editor.description.pop();
             }
+            _ => {}
         }
     }
 
@@ -643,6 +732,75 @@ impl App {
             hosts: self.profile_editor.hosts.clone(),
             targets: self.profile_editor.targets.clone(),
         })
+    }
+
+    fn detect_profile_editor_candidates(&self) -> Vec<ProfileEditorCandidate> {
+        let mut candidates = Vec::new();
+        let Some(snapshot) = &self.current_snapshot else {
+            return candidates;
+        };
+
+        for interface in &snapshot.interfaces {
+            for address in &interface.ipv4 {
+                if let Some(prefix_len) = address.prefix_len {
+                    if let Some(cidr) = ipv4_cidr(&address.value, prefix_len) {
+                        push_candidate_once(
+                            &mut candidates,
+                            format!("Network {cidr}"),
+                            ProfileEditorCandidateValue::Network(ProfileNetwork {
+                                cidr: cidr.clone(),
+                                name: format!("{} network", interface.name),
+                                kind: Some(interface.network_kind.as_str().to_lowercase()),
+                            }),
+                        );
+                    }
+                }
+
+                if let Some(gateway) = &address.gateway {
+                    push_candidate_once(
+                        &mut candidates,
+                        format!("Gateway {gateway}"),
+                        ProfileEditorCandidateValue::Host(ProfileHost {
+                            ip: gateway.clone(),
+                            name: format!("{}-gateway", interface.name),
+                            role: Some("gateway".to_string()),
+                        }),
+                    );
+                }
+            }
+        }
+
+        for connection in &snapshot.connections {
+            if is_profile_candidate_ip(&connection.foreign_ip) {
+                push_candidate_once(
+                    &mut candidates,
+                    format!("Host {}", connection.foreign_ip),
+                    ProfileEditorCandidateValue::Host(ProfileHost {
+                        ip: connection.foreign_ip.clone(),
+                        name: format!("host-{}", sanitize_profile_label(&connection.foreign_ip)),
+                        role: Some("remote".to_string()),
+                    }),
+                );
+
+                if let Ok(port) = connection.foreign_port.parse::<u16>() {
+                    push_candidate_once(
+                        &mut candidates,
+                        format!("Target {}:{port}", connection.foreign_ip),
+                        ProfileEditorCandidateValue::Target(ProfileTarget {
+                            name: format!(
+                                "{}-{port}",
+                                sanitize_profile_label(&connection.foreign_ip)
+                            ),
+                            host: connection.foreign_ip.clone(),
+                            port: Some(port),
+                            kind: Some("service".to_string()),
+                        }),
+                    );
+                }
+            }
+        }
+
+        candidates
     }
 
     pub fn replace_snapshot(&mut self, mut snapshot: NetworkSnapshot) {
@@ -1781,6 +1939,35 @@ fn calculate_ipv6_subnet(ip: &Ipv6Addr, prefix_len: u8) -> Ipv6Addr {
         *subnet_octet = octet & mask_octet;
     }
     Ipv6Addr::from(subnet_octets)
+}
+
+fn ipv4_cidr(ip: &str, prefix_len: u8) -> Option<String> {
+    let ip = ip.parse::<Ipv4Addr>().ok()?;
+    let subnet = calculate_ipv4_subnet(&ip, prefix_len);
+    Some(format!("{subnet}/{prefix_len}"))
+}
+
+fn is_profile_candidate_ip(ip: &str) -> bool {
+    !matches!(ip, "*" | "::" | "0.0.0.0" | "*.*")
+        && ip.parse::<Ipv4Addr>().is_ok()
+        && !ip.starts_with("127.")
+}
+
+fn sanitize_profile_label(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect()
+}
+
+fn push_candidate_once(
+    candidates: &mut Vec<ProfileEditorCandidate>,
+    label: String,
+    value: ProfileEditorCandidateValue,
+) {
+    if !candidates.iter().any(|candidate| candidate.label == label) {
+        candidates.push(ProfileEditorCandidate { label, value });
+    }
 }
 
 fn interfaces_by_name(interfaces: &[NetworkInterface]) -> HashMap<&str, &NetworkInterface> {
