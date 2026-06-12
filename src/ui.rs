@@ -873,15 +873,18 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     frame.render_widget(tab_line, chunks[0]);
 
                     let lines = match app.connection_details_section {
-                        ConnectionDetailsSection::Summary => connection_summary_lines(
-                            proto,
-                            local_ip,
-                            local_port,
-                            foreign_ip,
-                            foreign_port,
-                            state.as_deref(),
-                            resolve_connection_interface(app, local_ip),
-                        ),
+                        ConnectionDetailsSection::Summary => {
+                            connection_summary_lines(details::ConnectionSummaryInput {
+                                proto,
+                                local_ip_display: app.profile_ip_display(local_ip),
+                                local_port,
+                                foreign_ip_display: app.profile_ip_display(foreign_ip),
+                                foreign_ip_raw: foreign_ip,
+                                foreign_port,
+                                state: state.as_deref(),
+                                mapped_interface: resolve_connection_interface(app, local_ip),
+                            })
+                        }
                         ConnectionDetailsSection::Whois => connection_whois_lines(app, foreign_ip),
                     };
 

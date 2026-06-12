@@ -174,15 +174,18 @@ pub(super) fn resolve_connection_interface(app: &App, local_ip: &str) -> String 
     }
 }
 
-pub(super) fn connection_summary_lines(
-    proto: &str,
-    local_ip: &str,
-    local_port: &str,
-    foreign_ip: &str,
-    foreign_port: &str,
-    state: Option<&str>,
-    mapped_interface: String,
-) -> Vec<Line<'static>> {
+pub(super) struct ConnectionSummaryInput<'a> {
+    pub proto: &'a str,
+    pub local_ip_display: String,
+    pub local_port: &'a str,
+    pub foreign_ip_display: String,
+    pub foreign_ip_raw: &'a str,
+    pub foreign_port: &'a str,
+    pub state: Option<&'a str>,
+    pub mapped_interface: String,
+}
+
+pub(super) fn connection_summary_lines(input: ConnectionSummaryInput<'_>) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(Span::styled(
             "=== Connection Summary ===",
@@ -196,39 +199,39 @@ pub(super) fn connection_summary_lines(
                 "Protocol:          ",
                 Style::default().add_modifier(Modifier::BOLD),
             ),
-            Span::raw(proto.to_uppercase().to_string()),
+            Span::raw(input.proto.to_uppercase().to_string()),
         ]),
         Line::from(vec![
             Span::styled(
                 "Local IP:          ",
                 Style::default().add_modifier(Modifier::BOLD),
             ),
-            Span::raw(local_ip.to_string()),
+            Span::raw(input.local_ip_display),
         ]),
         Line::from(vec![
             Span::styled(
                 "Local Port:        ",
                 Style::default().add_modifier(Modifier::BOLD),
             ),
-            Span::raw(local_port.to_string()),
+            Span::raw(input.local_port.to_string()),
         ]),
         Line::from(vec![
             Span::styled(
                 "Foreign IP:        ",
                 Style::default().add_modifier(Modifier::BOLD),
             ),
-            Span::raw(foreign_ip.to_string()),
+            Span::raw(input.foreign_ip_display),
         ]),
         Line::from(vec![
             Span::styled(
                 "Foreign Port:      ",
                 Style::default().add_modifier(Modifier::BOLD),
             ),
-            Span::raw(foreign_port.to_string()),
+            Span::raw(input.foreign_port.to_string()),
         ]),
     ];
 
-    if let Some(state) = state {
+    if let Some(state) = input.state {
         lines.push(Line::from(vec![
             Span::styled(
                 "TCP State:         ",
@@ -243,10 +246,10 @@ pub(super) fn connection_summary_lines(
             "Associated Interface:",
             Style::default().add_modifier(Modifier::BOLD),
         ),
-        Span::raw(format!(" {}", mapped_interface)),
+        Span::raw(format!(" {}", input.mapped_interface)),
     ]));
 
-    if is_remote_connection_target(foreign_ip) {
+    if is_remote_connection_target(input.foreign_ip_raw) {
         lines.push(Line::from("Press c: Copy IP | w: WHOIS Query"));
     }
 

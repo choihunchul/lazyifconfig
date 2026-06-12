@@ -818,7 +818,7 @@ git commit -m "feat: show active profile"
 - Modify: `src/ui/details.rs`
 - Test: `tests/app_state.rs`
 
-- [ ] **Step 1: Add app label helper tests**
+- [x] **Step 1: Add app label helper tests**
 
 Append to `tests/app_state.rs`:
 
@@ -852,7 +852,7 @@ role = "gateway"
 }
 ```
 
-- [ ] **Step 2: Run failing test**
+- [x] **Step 2: Run failing test**
 
 Run:
 
@@ -862,7 +862,7 @@ cargo test --test app_state app_labels_ip_with_active_profile
 
 Expected: FAIL because `profile_label_for_ip` does not exist.
 
-- [ ] **Step 3: Add app label helpers**
+- [x] **Step 3: Add app label helpers**
 
 Modify `src/app.rs`:
 
@@ -881,7 +881,7 @@ pub fn profile_ip_display(&self, ip: &str) -> String {
 }
 ```
 
-- [ ] **Step 4: Use labels in connection table**
+- [x] **Step 4: Use labels in connection table**
 
 Modify `src/ui/tables.rs` in `render_connections_table` row creation:
 
@@ -891,15 +891,15 @@ highlighted_filter_cell(local_port.clone(), &app.connection_filter),
 highlighted_filter_cell(app.profile_ip_display(foreign_ip), &app.connection_filter),
 ```
 
-Increase local/foreign IP constraints:
+Keep local/foreign IP constraints compact so narrow panes still render headers. Full labels are visible in the selected connection details panel.
 
 ```rust
-Constraint::Length(18),
+Constraint::Length(10),
 Constraint::Length(5),
-Constraint::Length(18),
+Constraint::Length(10),
 ```
 
-- [ ] **Step 5: Use labels in details**
+- [x] **Step 5: Use labels in details**
 
 Modify `src/ui/details.rs` `connection_summary_lines` signature to accept already formatted IPs, or add profile-aware formatting at call site where `connection_summary_lines` is called. Keep raw `foreign_ip` for WHOIS action logic.
 
@@ -910,7 +910,7 @@ Local IP:          10.20.4.82 Office LAN
 Foreign IP:        10.20.1.1 office-gateway
 ```
 
-- [ ] **Step 6: Run tests**
+- [x] **Step 6: Run tests**
 
 Run:
 
@@ -921,7 +921,7 @@ cargo test
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/app.rs src/ui/tables.rs src/ui/details.rs tests/app_state.rs

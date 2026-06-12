@@ -463,6 +463,19 @@ impl App {
         }
     }
 
+    pub fn profile_label_for_ip(&self, ip: &str) -> Option<String> {
+        let profile = self.active_profile.as_ref()?;
+        crate::profile::label_ip(ip, profile).map(|label| label.display)
+    }
+
+    pub fn profile_ip_display(&self, ip: &str) -> String {
+        if let Some(label) = self.profile_label_for_ip(ip) {
+            format!("{ip} {label}")
+        } else {
+            ip.to_string()
+        }
+    }
+
     pub fn replace_snapshot(&mut self, mut snapshot: NetworkSnapshot) {
         let route_diagnostics = crate::route_inspector::diagnostics::build_route_diagnostics(
             &snapshot.routes,

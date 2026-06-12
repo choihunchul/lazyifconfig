@@ -30,7 +30,10 @@ kind = "service"
     let parsed = ProfileConfig::from_toml_str(input).expect("profile parses");
 
     assert_eq!(parsed.profile.name, "office");
-    assert_eq!(parsed.profile.description.as_deref(), Some("Office network"));
+    assert_eq!(
+        parsed.profile.description.as_deref(),
+        Some("Office network")
+    );
     assert_eq!(parsed.profile.auto_detect, ProfileAutoDetect::Prompt);
     assert_eq!(
         parsed.networks,

@@ -1092,3 +1092,37 @@ fn app_profile_status_text_includes_warning_when_present() {
         "Profile: default (profile file not found)"
     );
 }
+
+#[test]
+fn app_labels_ip_with_active_profile() {
+    let mut app = App::default();
+    let profile = lazyifconfig::profile::ProfileConfig::from_toml_str(
+        r#"
+[profile]
+name = "office"
+
+[[networks]]
+cidr = "10.20.0.0/16"
+name = "Office LAN"
+kind = "lan"
+
+[[hosts]]
+ip = "10.20.1.1"
+name = "office-gateway"
+role = "gateway"
+"#,
+    )
+    .unwrap();
+
+    app.set_active_profile("office", Some(profile));
+
+    assert_eq!(
+        app.profile_label_for_ip("10.20.1.1"),
+        Some("office-gateway".to_string())
+    );
+    assert_eq!(
+        app.profile_label_for_ip("10.20.4.82"),
+        Some("Office LAN".to_string())
+    );
+    assert_eq!(app.profile_label_for_ip("8.8.8.8"), None);
+}

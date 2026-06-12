@@ -133,9 +133,15 @@ pub(super) fn render_connections_table(frame: &mut Frame, app: &App, block: Bloc
             Some(
                 Row::new([
                     highlighted_filter_cell(proto.to_uppercase(), &app.connection_filter),
-                    highlighted_filter_cell(local_ip.clone(), &app.connection_filter),
+                    highlighted_filter_cell(
+                        app.profile_ip_display(local_ip),
+                        &app.connection_filter,
+                    ),
                     highlighted_filter_cell(local_port.clone(), &app.connection_filter),
-                    highlighted_filter_cell(foreign_ip.clone(), &app.connection_filter),
+                    highlighted_filter_cell(
+                        app.profile_ip_display(foreign_ip),
+                        &app.connection_filter,
+                    ),
                     highlighted_filter_cell(foreign_port.clone(), &app.connection_filter),
                     highlighted_filter_cell(
                         state.clone().unwrap_or_default(),
