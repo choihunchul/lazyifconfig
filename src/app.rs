@@ -455,6 +455,14 @@ impl App {
         self.profile_warning = Some(warning.into());
     }
 
+    pub fn profile_status_text(&self) -> String {
+        if let Some(warning) = &self.profile_warning {
+            format!("Profile: {} ({warning})", self.active_profile_name)
+        } else {
+            format!("Profile: {}", self.active_profile_name)
+        }
+    }
+
     pub fn replace_snapshot(&mut self, mut snapshot: NetworkSnapshot) {
         let route_diagnostics = crate::route_inspector::diagnostics::build_route_diagnostics(
             &snapshot.routes,

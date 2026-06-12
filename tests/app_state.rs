@@ -1081,3 +1081,14 @@ fn app_defaults_to_default_profile_name() {
     assert_eq!(app.active_profile_name(), "default");
     assert!(app.active_profile().is_none());
 }
+
+#[test]
+fn app_profile_status_text_includes_warning_when_present() {
+    let mut app = App::default();
+    app.set_profile_warning("profile file not found");
+
+    assert_eq!(
+        app.profile_status_text(),
+        "Profile: default (profile file not found)"
+    );
+}

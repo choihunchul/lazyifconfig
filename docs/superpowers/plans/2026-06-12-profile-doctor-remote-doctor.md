@@ -735,7 +735,7 @@ git commit -m "feat: track active profile state"
 - Modify: `src/ui.rs`
 - Test: `tests/app_state.rs`
 
-- [ ] **Step 1: Add display helper test**
+- [x] **Step 1: Add display helper test**
 
 Append to `tests/app_state.rs`:
 
@@ -752,7 +752,7 @@ fn app_profile_status_text_includes_warning_when_present() {
 }
 ```
 
-- [ ] **Step 2: Run failing test**
+- [x] **Step 2: Run failing test**
 
 Run:
 
@@ -762,7 +762,7 @@ cargo test --test app_state app_profile_status_text_includes_warning_when_presen
 
 Expected: FAIL because `profile_status_text` does not exist.
 
-- [ ] **Step 3: Add app helper**
+- [x] **Step 3: Add app helper**
 
 Modify `src/app.rs`:
 
@@ -776,7 +776,7 @@ pub fn profile_status_text(&self) -> String {
 }
 ```
 
-- [ ] **Step 4: Render profile in header**
+- [x] **Step 4: Render profile in header**
 
 Modify `src/ui.rs` `header_line(app)` after OS label:
 
@@ -792,7 +792,7 @@ spans.push(Span::styled(
 ));
 ```
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run:
 
@@ -803,7 +803,7 @@ cargo test
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/app.rs src/ui.rs tests/app_state.rs

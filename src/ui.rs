@@ -63,6 +63,16 @@ fn header_line(app: &App) -> Line<'static> {
         Span::styled(os_display_label(), Style::default().fg(Color::White)),
     ];
 
+    spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
+    spans.push(Span::styled(
+        app.profile_status_text(),
+        Style::default().fg(if app.profile_warning.is_some() {
+            Color::Yellow
+        } else {
+            Color::LightCyan
+        }),
+    ));
+
     if let Some(metrics) = app.process_metrics.as_ref() {
         if let Some(summary) = format_process_metrics(metrics) {
             spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
