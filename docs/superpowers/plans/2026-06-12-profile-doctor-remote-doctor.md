@@ -269,7 +269,7 @@ cargo test --test profile_model
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Cargo.toml Cargo.lock src/lib.rs src/profile/mod.rs src/profile/model.rs tests/profile_model.rs
@@ -284,7 +284,7 @@ git commit -m "feat: add profile toml model"
 - Create: `src/profile/join.rs`
 - Test: `tests/profile_matching.rs`
 
-- [ ] **Step 1: Add failing matching tests**
+- [x] **Step 1: Add failing matching tests**
 
 Create `tests/profile_matching.rs`:
 
@@ -347,7 +347,7 @@ fn suggestion_scores_fast_local_signals() {
 }
 ```
 
-- [ ] **Step 2: Run failing test**
+- [x] **Step 2: Run failing test**
 
 Run:
 
@@ -357,7 +357,7 @@ cargo test --test profile_matching
 
 Expected: FAIL because matching API does not exist.
 
-- [ ] **Step 3: Export matching modules**
+- [x] **Step 3: Export matching modules**
 
 Modify `src/profile/mod.rs`:
 
@@ -373,7 +373,7 @@ pub use model::{
 pub use r#match::{suggest_profile, ProfileSuggestion, ProfileSuggestionInput};
 ```
 
-- [ ] **Step 4: Implement CIDR and suggestion logic**
+- [x] **Step 4: Implement CIDR and suggestion logic**
 
 Create `src/profile/match.rs`:
 
@@ -476,7 +476,7 @@ pub fn ip_in_cidr(ip: &str, cidr: &str) -> bool {
 }
 ```
 
-- [ ] **Step 5: Implement label helper**
+- [x] **Step 5: Implement label helper**
 
 Create `src/profile/join.rs`:
 
@@ -509,7 +509,7 @@ pub fn label_ip(ip: &str, profile: &ProfileConfig) -> Option<ProfileIpLabel> {
 }
 ```
 
-- [ ] **Step 6: Run tests**
+- [x] **Step 6: Run tests**
 
 Run:
 
@@ -519,7 +519,7 @@ cargo test --test profile_model --test profile_matching
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/profile/mod.rs src/profile/match.rs src/profile/join.rs tests/profile_matching.rs
