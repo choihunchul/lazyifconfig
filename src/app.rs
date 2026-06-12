@@ -6,6 +6,7 @@ use crate::model::{
     ProcessMetrics, PublicIpInfo, RouteDiagnostic, RouteEntry, RouteInspectorSection,
     RoutePathResult, RouteSortColumn, Subnet,
 };
+use crate::profile::ProfileConfig;
 use crate::tools::{
     validate_tool_input, ToolAvailability, ToolExecutionState, ToolId, ToolInput, ToolRegistry,
     ToolResult,
@@ -326,6 +327,9 @@ pub struct App {
     pub route_inspector: RouteInspectorState,
     pub port_details_section: PortDetailsSection,
     pub connection_details_section: ConnectionDetailsSection,
+    pub active_profile_name: String,
+    pub active_profile: Option<ProfileConfig>,
+    pub profile_warning: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -425,11 +429,32 @@ impl Default for App {
             route_inspector: RouteInspectorState::default(),
             port_details_section: PortDetailsSection::Summary,
             connection_details_section: ConnectionDetailsSection::Summary,
+            active_profile_name: "default".to_string(),
+            active_profile: None,
+            profile_warning: None,
         }
     }
 }
 
 impl App {
+    pub fn active_profile_name(&self) -> &str {
+        self.active_profile_name.as_str()
+    }
+
+    pub fn active_profile(&self) -> Option<&ProfileConfig> {
+        self.active_profile.as_ref()
+    }
+
+    pub fn set_active_profile(&mut self, name: impl Into<String>, profile: Option<ProfileConfig>) {
+        self.active_profile_name = name.into();
+        self.active_profile = profile;
+        self.profile_warning = None;
+    }
+
+    pub fn set_profile_warning(&mut self, warning: impl Into<String>) {
+        self.profile_warning = Some(warning.into());
+    }
+
     pub fn replace_snapshot(&mut self, mut snapshot: NetworkSnapshot) {
         let route_diagnostics = crate::route_inspector::diagnostics::build_route_diagnostics(
             &snapshot.routes,

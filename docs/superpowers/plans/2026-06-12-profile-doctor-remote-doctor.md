@@ -536,7 +536,7 @@ git commit -m "feat: match profile labels"
 - Test: `tests/profile_store.rs`
 - Test: `tests/app_state.rs`
 
-- [ ] **Step 1: Add failing store tests**
+- [x] **Step 1: Add failing store tests**
 
 Create `tests/profile_store.rs`:
 
@@ -578,7 +578,7 @@ fn app_defaults_to_default_profile_name() {
 }
 ```
 
-- [ ] **Step 2: Run failing tests**
+- [x] **Step 2: Run failing tests**
 
 Run:
 
@@ -588,7 +588,7 @@ cargo test --test profile_store app_defaults_to_default_profile_name
 
 Expected: FAIL because store API and app profile state do not exist.
 
-- [ ] **Step 3: Export store module**
+- [x] **Step 3: Export store module**
 
 Modify `src/profile/mod.rs`:
 
@@ -609,7 +609,7 @@ pub use store::{
 };
 ```
 
-- [ ] **Step 4: Implement profile path/store helpers**
+- [x] **Step 4: Implement profile path/store helpers**
 
 Create `src/profile/store.rs`:
 
@@ -638,7 +638,7 @@ pub fn load_profile_from_path(path: &Path) -> Result<ProfileConfig, String> {
 }
 ```
 
-- [ ] **Step 5: Add app profile state**
+- [x] **Step 5: Add app profile state**
 
 Modify `src/app.rs`: import `ProfileConfig`, add fields to `App`, default them, and add helpers.
 
@@ -684,7 +684,7 @@ pub fn set_profile_warning(&mut self, warning: impl Into<String>) {
 }
 ```
 
-- [ ] **Step 6: Wire CLI profile name only**
+- [x] **Step 6: Wire CLI profile name only**
 
 Modify `src/main.rs` before TUI init:
 
@@ -712,7 +712,7 @@ if let Some(profile_name) = profile_override {
 }
 ```
 
-- [ ] **Step 7: Run tests**
+- [x] **Step 7: Run tests**
 
 Run:
 
@@ -722,7 +722,7 @@ cargo test --test profile_store --test app_state
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/profile/mod.rs src/profile/store.rs src/app.rs src/main.rs tests/profile_store.rs tests/app_state.rs

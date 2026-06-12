@@ -75,6 +75,20 @@ async fn run_tools_cli_command(args: &[String]) -> Result<String, String> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli_args = std::env::args().skip(1).collect::<Vec<_>>();
+    let mut profile_override: Option<String> = None;
+    let mut remaining_args = Vec::new();
+    let mut iter = cli_args.into_iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--profile" {
+            if let Some(value) = iter.next() {
+                profile_override = Some(value);
+            }
+        } else {
+            remaining_args.push(arg);
+        }
+    }
+    let cli_args = remaining_args;
+
     if cli_args.first().map(String::as_str) == Some("tools") {
         match run_tools_cli_command(&cli_args[1..]).await {
             Ok(output) => {
@@ -97,6 +111,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::default();
+    if let Some(profile_name) = profile_override {
+        app.active_profile_name = profile_name;
+    }
     let _ = tick_update(&mut app);
 
     let mut last_tick = std::time::Instant::now();

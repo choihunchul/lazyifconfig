@@ -1073,3 +1073,11 @@ fn test_raw_viewer_search_highlights() {
     assert!(line_content.is_char_boundary(m.end_byte));
     assert_eq!(&line_content[m.start_byte..m.end_byte], "테스트");
 }
+
+#[test]
+fn app_defaults_to_default_profile_name() {
+    let app = App::default();
+
+    assert_eq!(app.active_profile_name(), "default");
+    assert!(app.active_profile().is_none());
+}
