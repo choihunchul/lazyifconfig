@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use lazyifconfig::profile::{
-    config_path_for_base, default_profile_path_for_base, list_profile_names_for_base,
-    profile_path_for_base, save_profile_to_base, ProfileConfig,
+    config_base_dir_for_env, config_path_for_base, default_profile_path_for_base,
+    list_profile_names_for_base, profile_path_for_base, save_profile_to_base, ProfileConfig,
 };
 
 #[test]
@@ -45,4 +45,38 @@ name = "office"
     assert_eq!(names, vec!["default".to_string(), "office".to_string()]);
 
     let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn windows_config_base_prefers_appdata() {
+    let env = [("APPDATA", r"C:\Users\me\AppData\Roaming")];
+
+    assert_eq!(
+        config_base_dir_for_env("windows", &env),
+        PathBuf::from(r"C:\Users\me\AppData\Roaming")
+    );
+}
+
+#[test]
+fn windows_config_base_falls_back_to_userprofile_roaming() {
+    let env = [("USERPROFILE", r"C:\Users\me")];
+
+    assert_eq!(
+        config_base_dir_for_env("windows", &env),
+        PathBuf::from(r"C:\Users\me")
+            .join("AppData")
+            .join("Roaming")
+    );
+}
+
+#[test]
+fn unix_config_base_keeps_xdg_then_home_config() {
+    assert_eq!(
+        config_base_dir_for_env("linux", &[("XDG_CONFIG_HOME", "/home/me/.config2")]),
+        PathBuf::from("/home/me/.config2")
+    );
+    assert_eq!(
+        config_base_dir_for_env("macos", &[("HOME", "/Users/me")]),
+        PathBuf::from("/Users/me/.config")
+    );
 }

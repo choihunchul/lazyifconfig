@@ -7,19 +7,45 @@ pub fn config_path_for_base(base: &Path) -> PathBuf {
 }
 
 pub fn config_base_dir() -> PathBuf {
-    if let Ok(path) = std::env::var("XDG_CONFIG_HOME") {
-        if !path.trim().is_empty() {
+    let env = [
+        ("APPDATA", std::env::var("APPDATA").ok()),
+        ("USERPROFILE", std::env::var("USERPROFILE").ok()),
+        ("XDG_CONFIG_HOME", std::env::var("XDG_CONFIG_HOME").ok()),
+        ("HOME", std::env::var("HOME").ok()),
+    ];
+    let env_refs = env
+        .iter()
+        .filter_map(|(key, value)| value.as_deref().map(|value| (*key, value)))
+        .collect::<Vec<_>>();
+    config_base_dir_for_env(std::env::consts::OS, &env_refs)
+}
+
+pub fn config_base_dir_for_env(os: &str, env: &[(&str, &str)]) -> PathBuf {
+    if os == "windows" {
+        if let Some(path) = env_value(env, "APPDATA") {
             return PathBuf::from(path);
         }
+        if let Some(profile) = env_value(env, "USERPROFILE") {
+            return PathBuf::from(profile).join("AppData").join("Roaming");
+        }
+        return PathBuf::from(".");
     }
 
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.trim().is_empty() {
-            return PathBuf::from(home).join(".config");
-        }
+    if let Some(path) = env_value(env, "XDG_CONFIG_HOME") {
+        return PathBuf::from(path);
+    }
+
+    if let Some(home) = env_value(env, "HOME") {
+        return PathBuf::from(home).join(".config");
     }
 
     PathBuf::from(".")
+}
+
+fn env_value<'a>(env: &'a [(&str, &str)], key: &str) -> Option<&'a str> {
+    env.iter()
+        .find(|(candidate, value)| *candidate == key && !value.trim().is_empty())
+        .map(|(_, value)| *value)
 }
 
 pub fn default_profile_path_for_base(base: &Path) -> PathBuf {
