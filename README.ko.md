@@ -165,28 +165,28 @@ cargo test
 `v*` 형식의 tag가 push되면 GitHub Actions가 release를 생성합니다.
 
 ```bash
-git tag v0.2.10
-git push origin v0.2.10
+git tag v0.2.12
+git push origin v0.2.12
 ```
 
 `Release` workflow가 끝나면 Homebrew tap workflow가 자동으로 실행되어 `choihunchul/homebrew-tap`을 업데이트합니다.
-GitHub Actions에서 `0.2.10` 또는 `v0.2.10` 같은 tag를 입력해 `Publish Homebrew Tap`을 수동 재실행할 수도 있습니다.
+GitHub Actions에서 `0.2.12` 또는 `v0.2.12` 같은 tag를 입력해 `Publish Homebrew Tap`을 수동 재실행할 수도 있습니다.
 
 같은 `Release` workflow가 끝나면 `Publish APT Repository` workflow가 자동으로 실행되어 `amd64`와 `arm64` `.deb` asset을 `choihunchul/apt-repo`에 publish합니다.
-GitHub Actions에서 `0.2.10` 또는 `v0.2.10` 같은 tag를 입력해 `Publish APT Repository`를 수동 재실행할 수도 있습니다.
+GitHub Actions에서 `0.2.12` 또는 `v0.2.12` 같은 tag를 입력해 `Publish APT Repository`를 수동 재실행할 수도 있습니다.
 
 같은 `Release` workflow가 끝나면 `Publish WinGet Package` workflow가 Windows release asset에 대한 manifest bump pull request를 `microsoft/winget-pkgs`에 엽니다.
-GitHub Actions에서 `0.2.10` 또는 `v0.2.10` 같은 tag를 입력해 `Publish WinGet Package`를 수동 재실행할 수도 있습니다.
+GitHub Actions에서 `0.2.12` 또는 `v0.2.12` 같은 tag를 입력해 `Publish WinGet Package`를 수동 재실행할 수도 있습니다.
 
 GitHub Actions에서 `Create Release Tag` workflow도 실행할 수 있습니다.
-입력값으로 `0.2.10` 또는 `v0.2.10`을 넣으면 다음을 수행합니다.
+입력값으로 `0.2.12` 또는 `v0.2.12`을 넣으면 다음을 수행합니다.
 
 - 버전이 `Cargo.toml`과 일치하는지 확인
 - annotated `v*` tag 생성
 - tag를 push하여 `Release` workflow가 artifact를 빌드하고 GitHub Release를 publish하게 함
 
 crates.io publish는 GitHub Actions의 `Publish Crate` workflow로 실행합니다.
-`0.2.10` 또는 `v0.2.10`을 입력하면 다음을 수행합니다.
+`0.2.12` 또는 `v0.2.12`을 입력하면 다음을 수행합니다.
 
 - 버전이 `Cargo.toml`과 일치하는지 확인
 - `cargo publish --dry-run --locked` 실행
