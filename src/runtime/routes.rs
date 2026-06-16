@@ -1,5 +1,7 @@
 use crate::app::App;
-use crate::collector::routes::{parse_linux_route_path, parse_macos_route_path};
+use crate::collector::routes::{
+    parse_linux_route_path, parse_macos_route_path, parse_windows_route_path,
+};
 use crate::command::{run_command_capture, CommandResult, OwnedCommandSpec};
 use crate::model::{CommandOutput, CommandSourceId};
 
@@ -14,11 +16,7 @@ pub fn run_route_path_lookup(app: &mut App) {
     let command = crate::command::route_path_command_spec(&destination);
     match capture_owned_command_output(app, CommandSourceId::RoutePath, &command) {
         Ok(output) => {
-            let parsed = if cfg!(target_os = "linux") {
-                parse_linux_route_path(&destination, &output)
-            } else {
-                parse_macos_route_path(&destination, &output)
-            };
+            let parsed = parse_route_path_for_os(std::env::consts::OS, &destination, &output);
 
             match parsed {
                 Ok(mut result) => {
@@ -40,6 +38,20 @@ pub fn run_route_path_lookup(app: &mut App) {
             app.route_inspector.latest_path_result = None;
             app.route_inspector.latest_path_error = Some(route_path_command_error_message(&error));
         }
+    }
+}
+
+fn parse_route_path_for_os(
+    os: &str,
+    destination: &str,
+    output: &str,
+) -> Result<crate::model::RoutePathResult, String> {
+    if os == "linux" {
+        parse_linux_route_path(destination, output)
+    } else if os == "windows" {
+        parse_windows_route_path(destination, output)
+    } else {
+        parse_macos_route_path(destination, output)
     }
 }
 
@@ -141,6 +153,24 @@ mod tests {
             route_path_command_error_message("lookup failed"),
             "destination could not be resolved by route command: lookup failed"
         );
+    }
+
+    #[test]
+    fn route_path_parser_supports_windows_route_print_output() {
+        let output = "\
+IPv4 Route Table
+===========================================================================
+Active Routes:
+Network Destination        Netmask          Gateway       Interface  Metric
+          0.0.0.0          0.0.0.0      192.168.1.1    192.168.1.42     25
+===========================================================================
+";
+
+        let result = parse_route_path_for_os("windows", "8.8.8.8", output).unwrap();
+
+        assert_eq!(result.resolved_destination.as_deref(), Some("default"));
+        assert_eq!(result.gateway.as_deref(), Some("192.168.1.1"));
+        assert_eq!(result.interface.as_deref(), Some("192.168.1.42"));
     }
 
     #[test]

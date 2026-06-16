@@ -22,7 +22,7 @@ pub fn parse_listening_ports(input: &str) -> Vec<ListeningPort> {
             continue;
         }
 
-        let command = parts[0].to_string();
+        let command = decode_lsof_command_escapes(parts[0]);
         let pid = parts[1].to_string();
         let user = parts[2].to_string();
         let proto = parts[7].to_lowercase();
@@ -159,6 +159,46 @@ fn parse_ss_pid(process: &str) -> Option<String> {
     }
 }
 
+fn decode_lsof_command_escapes(command: &str) -> String {
+    let mut decoded = String::with_capacity(command.len());
+    let mut chars = command.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch != '\\' || chars.peek() != Some(&'x') {
+            decoded.push(ch);
+            continue;
+        }
+
+        chars.next();
+        let first = chars.next();
+        let second = chars.next();
+        match (first, second) {
+            (Some(a), Some(b)) => {
+                let hex = [a, b].iter().collect::<String>();
+                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                    decoded.push(byte as char);
+                } else {
+                    decoded.push('\\');
+                    decoded.push('x');
+                    decoded.push(a);
+                    decoded.push(b);
+                }
+            }
+            (Some(a), None) => {
+                decoded.push('\\');
+                decoded.push('x');
+                decoded.push(a);
+            }
+            (None, _) => {
+                decoded.push('\\');
+                decoded.push('x');
+            }
+        }
+    }
+
+    decoded
+}
+
 fn split_node_name(node: &str) -> (String, String) {
     if let Some(pos) = node.rfind(':') {
         let ip = node[..pos]
@@ -197,6 +237,21 @@ Python  23456 user    5u  IPv4 0xabcdef0123456789      0t0  TCP 127.0.0.1:8000 (
         assert_eq!(ports[1].proto, "tcp");
         assert_eq!(ports[1].local_ip, "127.0.0.1");
         assert_eq!(ports[1].local_port, "8000");
+    }
+
+    #[test]
+    fn parses_lsof_escaped_command_names() {
+        let input = "\
+COMMAND                        PID USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME
+Code\\x20Helper\\x20(Plugin)   58912 user   18u  IPv4 0x123456789abcdef0      0t0  TCP 127.0.0.1:6009 (LISTEN)
+Cursor\\x20Helper\\x20(Plugin) 89166 user   42u  IPv4 0xabcdef0123456789      0t0  TCP 127.0.0.1:7343 (LISTEN)
+";
+
+        let ports = parse_listening_ports(input);
+
+        assert_eq!(ports.len(), 2);
+        assert_eq!(ports[0].command, "Code Helper (Plugin)");
+        assert_eq!(ports[1].command, "Cursor Helper (Plugin)");
     }
 
     #[test]

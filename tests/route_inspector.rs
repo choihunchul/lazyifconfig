@@ -1,5 +1,5 @@
 use lazyifconfig::collector::routes::{
-    parse_linux_route_path, parse_macos_route_path, parse_routes,
+    parse_linux_route_path, parse_macos_route_path, parse_routes, parse_windows_route_path,
 };
 use lazyifconfig::model::{
     InterfaceAddress, InterfaceStatus, InterfaceType, NetworkInterface, NetworkKind,
@@ -127,6 +127,52 @@ destination: default
     assert_eq!(result.gateway.as_deref(), Some("192.168.0.1"));
     assert_eq!(result.interface.as_deref(), Some("en0"));
     assert_eq!(result.raw_output, output);
+}
+
+#[test]
+fn parses_windows_route_print_output_for_destination_path() {
+    let output = "\
+===========================================================================
+Interface List
+ 12...aa bb cc dd ee ff ......Intel(R) Ethernet
+===========================================================================
+
+IPv4 Route Table
+===========================================================================
+Active Routes:
+Network Destination        Netmask          Gateway       Interface  Metric
+          0.0.0.0          0.0.0.0      192.168.1.1    192.168.1.42     25
+          8.8.8.0    255.255.255.0      10.10.10.1    192.168.1.42     10
+        127.0.0.0        255.0.0.0         On-link       127.0.0.1    331
+===========================================================================
+";
+
+    let result = parse_windows_route_path("8.8.8.8", output).unwrap();
+
+    assert_eq!(result.destination, "8.8.8.8");
+    assert_eq!(result.resolved_destination.as_deref(), Some("8.8.8.0/24"));
+    assert_eq!(result.gateway.as_deref(), Some("10.10.10.1"));
+    assert_eq!(result.interface.as_deref(), Some("192.168.1.42"));
+    assert_eq!(result.source_ip.as_deref(), Some("192.168.1.42"));
+    assert_eq!(result.raw_output, output);
+}
+
+#[test]
+fn windows_route_path_falls_back_to_default_route() {
+    let output = "\
+IPv4 Route Table
+===========================================================================
+Active Routes:
+Network Destination        Netmask          Gateway       Interface  Metric
+          0.0.0.0          0.0.0.0      192.168.1.1    192.168.1.42     25
+===========================================================================
+";
+
+    let result = parse_windows_route_path("8.8.8.8", output).unwrap();
+
+    assert_eq!(result.resolved_destination.as_deref(), Some("default"));
+    assert_eq!(result.gateway.as_deref(), Some("192.168.1.1"));
+    assert_eq!(result.interface.as_deref(), Some("192.168.1.42"));
 }
 
 #[test]

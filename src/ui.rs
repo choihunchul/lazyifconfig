@@ -198,7 +198,7 @@ fn get_active_command(view_mode: ViewMode) -> &'static str {
             } else if cfg!(target_os = "windows") {
                 "netstat -ano -p tcp"
             } else {
-                "lsof -iTCP -sTCP:LISTEN -P -n"
+                "lsof +c 0 -iTCP -sTCP:LISTEN -P -n"
             }
         }
         ViewMode::Routes => {
@@ -1397,7 +1397,7 @@ mod tests {
         } else if cfg!(target_os = "windows") {
             "netstat -ano -p tcp"
         } else {
-            "lsof -iTCP -sTCP:LISTEN -P -n"
+            "lsof +c 0 -iTCP -sTCP:LISTEN -P -n"
         };
         assert_eq!(get_active_command(ViewMode::Ports), ports_command);
         let route_command = if cfg!(target_os = "linux") {

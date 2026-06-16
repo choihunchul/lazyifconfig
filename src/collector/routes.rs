@@ -236,6 +236,32 @@ pub fn parse_macos_route_path(destination: &str, output: &str) -> Result<RoutePa
     })
 }
 
+pub fn parse_windows_route_path(
+    destination: &str,
+    output: &str,
+) -> Result<RoutePathResult, String> {
+    let target = destination
+        .parse::<std::net::Ipv4Addr>()
+        .map_err(|_| "windows route path lookup requires an IPv4 destination".to_string())?;
+    let routes = parse_windows_route_print(output);
+    let best_route = routes
+        .iter()
+        .filter(|route| route.family == RouteFamily::Ipv4)
+        .filter(|route| windows_ipv4_route_matches(route, target))
+        .max_by_key(|route| windows_route_prefix_len(route))
+        .ok_or_else(|| "route path output is missing a matching IPv4 route".to_string())?;
+
+    Ok(RoutePathResult {
+        destination: destination.to_string(),
+        resolved_destination: Some(best_route.destination.clone()),
+        source_ip: Some(best_route.interface.clone()),
+        interface: Some(best_route.interface.clone()),
+        gateway: Some(best_route.gateway.clone()),
+        is_vpn: false,
+        raw_output: output.to_string(),
+    })
+}
+
 fn is_linux_ip_route_line(line: &str) -> bool {
     let parts: Vec<&str> = line.split_whitespace().collect();
     value_after(&parts, "dev").is_some()
@@ -246,6 +272,40 @@ fn looks_like_linux_route_get_output(input: &str) -> bool {
         let trimmed = line.trim();
         trimmed == "cache" || trimmed.split_whitespace().any(|part| part == "uid")
     })
+}
+
+fn windows_ipv4_route_matches(route: &RouteEntry, target: std::net::Ipv4Addr) -> bool {
+    if route.destination == "default" {
+        return true;
+    }
+    let Some((network, prefix_len)) = route.destination.split_once('/') else {
+        return false;
+    };
+    let Ok(network) = network.parse::<std::net::Ipv4Addr>() else {
+        return false;
+    };
+    ipv4_in_prefix(target, network, prefix_len.parse().unwrap_or(32))
+}
+
+fn windows_route_prefix_len(route: &RouteEntry) -> u8 {
+    if route.destination == "default" {
+        return 0;
+    }
+    route
+        .destination
+        .split_once('/')
+        .and_then(|(_, prefix)| prefix.parse().ok())
+        .unwrap_or(32)
+}
+
+fn ipv4_in_prefix(target: std::net::Ipv4Addr, network: std::net::Ipv4Addr, prefix_len: u8) -> bool {
+    let prefix_len = prefix_len.min(32);
+    let mask = if prefix_len == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix_len)
+    };
+    (u32::from(target) & mask) == (u32::from(network) & mask)
 }
 
 fn infer_linux_route_family(destination: &str, gateway: &str) -> RouteFamily {

@@ -132,9 +132,9 @@ pub fn listening_ports_command_spec_for_os(os: &str) -> CommandSpec {
         }
     } else {
         CommandSpec {
-            display: "lsof -iTCP -sTCP:LISTEN -P -n",
+            display: "lsof +c 0 -iTCP -sTCP:LISTEN -P -n",
             program: "lsof",
-            args: &["-iTCP", "-sTCP:LISTEN", "-P", "-n"],
+            args: &["+c", "0", "-iTCP", "-sTCP:LISTEN", "-P", "-n"],
         }
     }
 }
@@ -190,10 +190,14 @@ pub fn run_command_capture(program: &str, args: &[&str]) -> Result<CommandResult
         .map_err(|e| e.to_string())?;
 
     Ok(CommandResult {
-        stdout: String::from_utf8(output.stdout).map_err(|e| e.to_string())?,
+        stdout: decode_command_stdout(output.stdout),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
         exit_code: output.status.code(),
     })
+}
+
+fn decode_command_stdout(stdout: Vec<u8>) -> String {
+    String::from_utf8_lossy(&stdout).to_string()
 }
 
 pub fn run_owned_command_capture(command: &OwnedCommandSpec) -> Result<CommandResult, String> {
@@ -506,9 +510,12 @@ mod tests {
     fn ports_command_uses_lsof_on_non_linux() {
         let command = listening_ports_command_spec_for_os("macos");
 
-        assert_eq!(command.display, "lsof -iTCP -sTCP:LISTEN -P -n");
+        assert_eq!(command.display, "lsof +c 0 -iTCP -sTCP:LISTEN -P -n");
         assert_eq!(command.program, "lsof");
-        assert_eq!(command.args, &["-iTCP", "-sTCP:LISTEN", "-P", "-n"]);
+        assert_eq!(
+            command.args,
+            &["+c", "0", "-iTCP", "-sTCP:LISTEN", "-P", "-n"]
+        );
     }
 
     #[test]
@@ -564,6 +571,13 @@ mod tests {
         assert_eq!(unix.display, "kill -9 1234");
         assert_eq!(unix.program, "kill");
         assert_eq!(unix.args, vec!["-9", "1234"]);
+    }
+
+    #[test]
+    fn command_stdout_decode_is_lossy_for_non_utf8_windows_output() {
+        let decoded = decode_command_stdout(vec![0xc0, 0xdb, b' ', b'O', b'K']);
+
+        assert!(decoded.ends_with(" OK"));
     }
 
     #[test]
