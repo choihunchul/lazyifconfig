@@ -385,8 +385,8 @@ pub async fn run_command(spec: &ToolCommandSpec) -> Result<(String, String, Opti
         .map_err(|e| e.to_string())?;
 
     Ok((
-        String::from_utf8_lossy(&output.stdout).to_string(),
-        String::from_utf8_lossy(&output.stderr).to_string(),
+        crate::command::decode_command_output(&output.stdout),
+        crate::command::decode_command_output(&output.stderr),
         output.status.code(),
     ))
 }

@@ -190,10 +190,58 @@ pub fn run_command_capture(program: &str, args: &[&str]) -> Result<CommandResult
         .map_err(|e| e.to_string())?;
 
     Ok(CommandResult {
-        stdout: String::from_utf8(output.stdout).map_err(|e| e.to_string())?,
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        stdout: decode_command_output(&output.stdout),
+        stderr: decode_command_output(&output.stderr),
         exit_code: output.status.code(),
     })
+}
+
+pub fn decode_command_output(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_string(),
+        Err(_) => decode_non_utf8_command_output(bytes),
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn decode_non_utf8_command_output(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).to_string()
+}
+
+#[cfg(target_os = "windows")]
+fn decode_non_utf8_command_output(bytes: &[u8]) -> String {
+    use windows_sys::Win32::Globalization::{GetOEMCP, MultiByteToWideChar};
+
+    if bytes.is_empty() {
+        return String::new();
+    }
+
+    let code_page = unsafe { GetOEMCP() };
+    let len = bytes.len().min(i32::MAX as usize) as i32;
+    let wide_len =
+        unsafe { MultiByteToWideChar(code_page, 0, bytes.as_ptr(), len, std::ptr::null_mut(), 0) };
+
+    if wide_len <= 0 {
+        return String::from_utf8_lossy(bytes).to_string();
+    }
+
+    let mut wide = vec![0_u16; wide_len as usize];
+    let written = unsafe {
+        MultiByteToWideChar(
+            code_page,
+            0,
+            bytes.as_ptr(),
+            len,
+            wide.as_mut_ptr(),
+            wide_len,
+        )
+    };
+
+    if written <= 0 {
+        String::from_utf8_lossy(bytes).to_string()
+    } else {
+        String::from_utf16_lossy(&wide[..written as usize])
+    }
 }
 
 pub fn run_owned_command_capture(command: &OwnedCommandSpec) -> Result<CommandResult, String> {

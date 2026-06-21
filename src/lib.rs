@@ -1,6 +1,7 @@
 pub mod app;
 pub mod collector;
 pub mod command;
+pub mod input;
 pub mod model;
 pub mod route_inspector;
 pub mod runtime;

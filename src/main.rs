@@ -119,6 +119,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
                 Event::Key(key) => {
+                    if !lazyifconfig::input::should_handle_key_event(key) {
+                        continue;
+                    }
+
                     // --- Raw viewer mode: intercept all input ---
                     if app.raw_viewer.active {
                         if app.raw_viewer.search_active {
