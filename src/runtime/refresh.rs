@@ -207,7 +207,27 @@ fn collect_interfaces(
     app: &mut App,
 ) -> Result<(String, Vec<crate::model::NetworkInterface>), String> {
     if cfg!(target_os = "windows") {
-        match capture_powershell_output(
+        let interface_command = interface_command_spec();
+        match capture_command_output(
+            app,
+            CommandSourceId::Ifconfig,
+            interface_command.display,
+            interface_command.program,
+            interface_command.args,
+        )
+        .and_then(|output| {
+            let parsed = parse_interfaces(&output);
+            if parsed.is_empty() {
+                Err("ipconfig returned no parsed interface data".to_string())
+            } else {
+                Ok((output, parsed))
+            }
+        }) {
+            Ok(result) => return Ok(result),
+            Err(error) => push_windows_fallback_event(app, "interfaces", "PowerShell", &error),
+        }
+
+        return capture_powershell_output(
             app,
             CommandSourceId::Ifconfig,
             POWERSHELL_INTERFACES_COMMAND,
@@ -219,10 +239,7 @@ fn collect_interfaces(
             } else {
                 Ok((output, parsed))
             }
-        }) {
-            Ok(result) => return Ok(result),
-            Err(error) => push_windows_fallback_event(app, "interfaces", "ipconfig /all", &error),
-        }
+        });
     }
 
     let interface_command = interface_command_spec();
@@ -239,7 +256,26 @@ fn collect_interfaces(
 
 fn collect_route_table_output(app: &mut App) -> Result<String, String> {
     if cfg!(target_os = "windows") {
-        match capture_powershell_output(
+        let route_table_command = route_table_command_spec();
+        match capture_command_output(
+            app,
+            CommandSourceId::NetstatRoutes,
+            route_table_command.display,
+            route_table_command.program,
+            route_table_command.args,
+        )
+        .and_then(|output| {
+            if parse_routes(&output).is_empty() {
+                Err("route PRINT returned no parsed route data".to_string())
+            } else {
+                Ok(output)
+            }
+        }) {
+            Ok(output) => return Ok(output),
+            Err(error) => push_windows_fallback_event(app, "routes", "PowerShell", &error),
+        }
+
+        return capture_powershell_output(
             app,
             CommandSourceId::NetstatRoutes,
             POWERSHELL_ROUTES_COMMAND,
@@ -250,10 +286,7 @@ fn collect_route_table_output(app: &mut App) -> Result<String, String> {
             } else {
                 Ok(output)
             }
-        }) {
-            Ok(output) => return Ok(output),
-            Err(error) => push_windows_fallback_event(app, "routes", "route PRINT", &error),
-        }
+        });
     }
 
     let route_table_command = route_table_command_spec();
@@ -281,22 +314,33 @@ fn collect_routes(route_output: Option<&str>) -> Vec<RouteEntry> {
 
 fn collect_connections(app: &mut App) -> Vec<crate::model::ActiveConnection> {
     if cfg!(target_os = "windows") {
-        match capture_powershell_output(
+        match capture_command_output(
             app,
             CommandSourceId::NetstatConnections,
-            POWERSHELL_CONNECTIONS_COMMAND,
+            "netstat -an",
+            "netstat",
+            &["-an"],
         )
         .and_then(|output| {
-            let connections = parse_powershell_connections(&output);
+            let connections = parse_connections(&output);
             if connections.is_empty() {
-                Err("PowerShell returned no connection data".to_string())
+                Err("netstat -an returned no parsed connection data".to_string())
             } else {
                 Ok(connections)
             }
         }) {
             Ok(connections) => return connections,
-            Err(error) => push_windows_fallback_event(app, "connections", "netstat -an", &error),
+            Err(error) => push_windows_fallback_event(app, "connections", "PowerShell", &error),
         }
+
+        return capture_powershell_output(
+            app,
+            CommandSourceId::NetstatConnections,
+            POWERSHELL_CONNECTIONS_COMMAND,
+        )
+        .as_deref()
+        .map(parse_powershell_connections)
+        .unwrap_or_default();
     }
 
     let connections_res = capture_command_output(
@@ -314,18 +358,34 @@ fn collect_connections(app: &mut App) -> Vec<crate::model::ActiveConnection> {
 
 fn collect_listening_ports(app: &mut App) -> Vec<crate::model::ListeningPort> {
     if cfg!(target_os = "windows") {
-        match capture_powershell_output(app, CommandSourceId::LsofPorts, POWERSHELL_PORTS_COMMAND)
-            .and_then(|output| {
-                let ports = parse_powershell_listening_ports(&output);
-                if ports.is_empty() {
-                    Err("PowerShell returned no listening port data".to_string())
-                } else {
-                    Ok(ports)
-                }
-            }) {
+        let listening_ports_command = listening_ports_command_spec();
+        match capture_command_output(
+            app,
+            CommandSourceId::LsofPorts,
+            listening_ports_command.display,
+            listening_ports_command.program,
+            listening_ports_command.args,
+        )
+        .and_then(|output| {
+            let ports = parse_listening_ports(&output);
+            if ports.is_empty() {
+                Err("netstat -ano -p tcp returned no parsed listening port data".to_string())
+            } else {
+                Ok(ports)
+            }
+        }) {
             Ok(ports) => return ports,
-            Err(error) => push_windows_fallback_event(app, "ports", "netstat -ano -p tcp", &error),
+            Err(error) => push_windows_fallback_event(app, "ports", "PowerShell", &error),
         }
+
+        return capture_powershell_output(
+            app,
+            CommandSourceId::LsofPorts,
+            POWERSHELL_PORTS_COMMAND,
+        )
+        .as_deref()
+        .map(parse_powershell_listening_ports)
+        .unwrap_or_default();
     }
 
     let listening_ports_command = listening_ports_command_spec();
@@ -358,7 +418,7 @@ fn capture_powershell_output(
 
 fn push_windows_fallback_event(app: &mut App, area: &str, fallback: &str, error: &str) {
     let message = format!(
-        "{area}: PowerShell network command failed or returned no data; falling back to {fallback}. If localized command output is unsupported, run with PowerShell network cmdlets or administrator permissions. Cause: {error}"
+        "{area}: Windows command failed or returned no parsed data; falling back to {fallback}. If command output uses an unsupported language or permissions are required, PowerShell network cmdlets may still work. Cause: {error}"
     );
     if app
         .recent_events
