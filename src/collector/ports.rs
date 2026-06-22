@@ -51,7 +51,13 @@ pub fn parse_listening_ports(input: &str) -> Vec<ListeningPort> {
 }
 
 fn looks_like_windows_netstat(input: &str) -> bool {
-    input.contains("Proto") && input.contains("PID")
+    (input.contains("Proto") || input.contains("프로토콜"))
+        && input.contains("PID")
+        && input.lines().any(|line| {
+            line.split_whitespace()
+                .next()
+                .is_some_and(|part| part.eq_ignore_ascii_case("TCP"))
+        })
 }
 
 fn parse_windows_netstat_ports(input: &str) -> Vec<ListeningPort> {
@@ -282,5 +288,24 @@ Active Connections
         assert_eq!(ports[1].local_port, "3000");
         assert_eq!(ports[2].local_ip, "::");
         assert_eq!(ports[2].local_port, "8080");
+    }
+
+    #[test]
+    fn parses_korean_windows_netstat_listening_tcp_rows() {
+        let input = "\
+활성 연결
+
+  프로토콜  로컬 주소              외부 주소              상태            PID
+  TCP    127.0.0.1:5050         0.0.0.0:0              LISTENING       2460
+  TCP    127.0.0.1:24801        127.0.0.1:52108        ESTABLISHED     4684
+";
+
+        let ports = parse_listening_ports(input);
+
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0].proto, "tcp");
+        assert_eq!(ports[0].local_ip, "127.0.0.1");
+        assert_eq!(ports[0].local_port, "5050");
+        assert_eq!(ports[0].pid, "2460");
     }
 }

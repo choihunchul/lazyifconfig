@@ -437,9 +437,13 @@ impl App {
         );
 
         if !self.show_all {
+            let unfiltered_interfaces = snapshot.interfaces.clone();
             snapshot
                 .interfaces
                 .retain(|interface| interface.status == crate::model::InterfaceStatus::Up);
+            if snapshot.interfaces.is_empty() && !unfiltered_interfaces.is_empty() {
+                snapshot.interfaces = unfiltered_interfaces;
+            }
         }
 
         let selected_name = self.selected_interface_name().map(str::to_owned);

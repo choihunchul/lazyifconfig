@@ -917,6 +917,35 @@ fn test_routes_navigation() {
 }
 
 #[test]
+fn replace_snapshot_keeps_interfaces_when_up_filter_would_empty_the_list() {
+    let mut app = App::default();
+    app.replace_snapshot(NetworkSnapshot {
+        interfaces: vec![
+            interface_with_status(
+                "Wi-Fi",
+                InterfaceStatus::Down,
+                Some("192.168.200.154"),
+                None,
+            ),
+            interface_with_status(
+                "Tailscale",
+                InterfaceStatus::Down,
+                Some("100.98.176.6"),
+                None,
+            ),
+        ],
+        connections: vec![],
+        listening_ports: vec![],
+        routes: vec![],
+        captured_at_secs: 10,
+    });
+
+    let snapshot = app.current_snapshot.as_ref().unwrap();
+    assert_eq!(snapshot.interfaces.len(), 2);
+    assert_eq!(app.navigation_items.len(), 2);
+}
+
+#[test]
 fn route_filter_matches_destination_gateway_and_interface() {
     let mut app = App::default();
     app.replace_snapshot(NetworkSnapshot {

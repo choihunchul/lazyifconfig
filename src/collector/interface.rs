@@ -5,7 +5,7 @@ use crate::model::{
 };
 
 pub fn parse_interfaces(input: &str) -> Vec<NetworkInterface> {
-    if input.contains("Windows IP Configuration") {
+    if input.contains("Windows IP Configuration") || input.contains("Windows IP 구성") {
         return parse_windows_ipconfig(input);
     }
 
@@ -122,18 +122,12 @@ fn parse_windows_ipconfig(input: &str) -> Vec<NetworkInterface> {
             continue;
         }
 
-        if !line.starts_with(' ') && trimmed.ends_with(':') && trimmed.contains("adapter") {
+        if is_windows_adapter_header(line, trimmed) {
             if let Some(interface) = current.take() {
                 interfaces.push(finalize_windows_interface(interface));
             }
 
-            let name = trimmed
-                .trim_end_matches(':')
-                .split_once("adapter")
-                .map(|(_, value)| value.trim())
-                .filter(|value| !value.is_empty())
-                .unwrap_or(trimmed.trim_end_matches(':'))
-                .to_string();
+            let name = windows_adapter_name(trimmed);
 
             current = Some(NetworkInterface {
                 interface_type: infer_interface_type(&name),
@@ -154,13 +148,15 @@ fn parse_windows_ipconfig(input: &str) -> Vec<NetworkInterface> {
             continue;
         };
 
-        if let Some(value) = windows_field_value(trimmed, "Media State") {
-            if value.contains("disconnected") {
+        if let Some(value) = windows_field_value(trimmed, &["Media State", "미디어 상태"]) {
+            if value.contains("disconnected") || value.contains("연결 끊김") {
                 interface.status = InterfaceStatus::Down;
             }
-        } else if let Some(value) = windows_field_value(trimmed, "Physical Address") {
+        } else if let Some(value) =
+            windows_field_value(trimmed, &["Physical Address", "물리적 주소"])
+        {
             interface.mac_address = Some(value.replace('-', ":").to_lowercase());
-        } else if let Some(value) = windows_field_value(trimmed, "IPv4 Address") {
+        } else if let Some(value) = windows_field_value(trimmed, &["IPv4 Address", "IPv4 주소"]) {
             let clean = clean_windows_address(value);
             interface.ipv4.push(InterfaceAddress {
                 value: clean,
@@ -168,25 +164,30 @@ fn parse_windows_ipconfig(input: &str) -> Vec<NetworkInterface> {
                 gateway: None,
             });
             pending_v4_prefix = interface.ipv4.len().checked_sub(1);
-        } else if let Some(value) = windows_field_value(trimmed, "Subnet Mask") {
+        } else if let Some(value) = windows_field_value(trimmed, &["Subnet Mask", "서브넷 마스크"])
+        {
             if let (Some(index), Some(prefix)) = (pending_v4_prefix, dotted_mask_prefix(value)) {
                 if let Some(addr) = interface.ipv4.get_mut(index) {
                     addr.prefix_len = Some(prefix);
                 }
             }
-        } else if let Some(value) = windows_field_value(trimmed, "IPv6 Address") {
+        } else if let Some(value) = windows_field_value(trimmed, &["IPv6 Address", "IPv6 주소"]) {
             interface.ipv6.push(InterfaceAddress {
                 value: clean_windows_address(value),
                 prefix_len: None,
                 gateway: None,
             });
-        } else if let Some(value) = windows_field_value(trimmed, "Link-local IPv6 Address") {
+        } else if let Some(value) =
+            windows_field_value(trimmed, &["Link-local IPv6 Address", "링크-로컬 IPv6 주소"])
+        {
             interface.ipv6.push(InterfaceAddress {
                 value: clean_windows_address(value),
                 prefix_len: Some(64),
                 gateway: None,
             });
-        } else if let Some(value) = windows_field_value(trimmed, "Default Gateway") {
+        } else if let Some(value) =
+            windows_field_value(trimmed, &["Default Gateway", "기본 게이트웨이"])
+        {
             let gateway = clean_windows_address(value);
             if gateway.is_empty() {
                 continue;
@@ -214,15 +215,34 @@ fn parse_windows_ipconfig(input: &str) -> Vec<NetworkInterface> {
     interfaces
 }
 
+fn is_windows_adapter_header(line: &str, trimmed: &str) -> bool {
+    !line.starts_with(' ')
+        && trimmed.ends_with(':')
+        && (trimmed.contains("adapter") || trimmed.contains("어댑터"))
+}
+
+fn windows_adapter_name(trimmed: &str) -> String {
+    let without_colon = trimmed.trim_end_matches(':');
+    without_colon
+        .split_once("adapter")
+        .or_else(|| without_colon.split_once("어댑터"))
+        .map(|(_, value)| value.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(without_colon)
+        .to_string()
+}
+
 fn finalize_windows_interface(mut interface: NetworkInterface) -> NetworkInterface {
     interface.network_kind = classify_interface(&interface.name, &interface.ipv4, &interface.ipv6);
     interface
 }
 
-fn windows_field_value<'a>(line: &'a str, field: &str) -> Option<&'a str> {
+fn windows_field_value<'a>(line: &'a str, fields: &[&str]) -> Option<&'a str> {
     let (left, right) = line.split_once(':')?;
-    left.trim()
-        .starts_with(field)
+    let label = left.trim();
+    fields
+        .iter()
+        .any(|field| label.starts_with(field))
         .then_some(right.trim())
         .filter(|value| !value.is_empty())
 }
@@ -549,6 +569,37 @@ Wireless LAN adapter Wi-Fi:
         assert_eq!(
             interfaces[1].mac_address.as_deref(),
             Some("11:22:33:44:55:66")
+        );
+    }
+
+    #[test]
+    fn parses_korean_windows_ipconfig_output() {
+        let input = "\
+Windows IP 구성
+
+무선 LAN 어댑터 Wi-Fi:
+
+   연결별 DNS 접미사. . . . : gn-866ac
+   설명. . . . . . . . . . . . : Intel(R) Wi-Fi 6 AX101
+   물리적 주소 . . . . . . . . : A0-02-A5-78-76-7F
+   IPv4 주소 . . . . . . . . . : 192.168.200.154(기본 설정)
+   서브넷 마스크 . . . . . . . : 255.255.255.0
+   기본 게이트웨이 . . . . . . : 192.168.200.254
+";
+
+        let interfaces = parse_interfaces(input);
+
+        assert_eq!(interfaces.len(), 1);
+        assert_eq!(interfaces[0].name, "Wi-Fi");
+        assert_eq!(
+            interfaces[0].mac_address.as_deref(),
+            Some("a0:02:a5:78:76:7f")
+        );
+        assert_eq!(interfaces[0].ipv4[0].value, "192.168.200.154");
+        assert_eq!(interfaces[0].ipv4[0].prefix_len, Some(24));
+        assert_eq!(
+            interfaces[0].ipv4[0].gateway.as_deref(),
+            Some("192.168.200.254")
         );
     }
 }

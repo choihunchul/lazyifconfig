@@ -52,7 +52,10 @@ pub fn parse_routes(netstat_output: &str) -> Vec<RouteEntry> {
 }
 
 fn looks_like_windows_route_print(input: &str) -> bool {
-    input.contains("IPv4 Route Table") || input.contains("Active Routes:")
+    input.contains("IPv4 Route Table")
+        || input.contains("IPv4 경로 테이블")
+        || input.contains("Active Routes:")
+        || input.contains("활성 경로:")
 }
 
 fn parse_windows_route_print(input: &str) -> Vec<RouteEntry> {
@@ -63,29 +66,30 @@ fn parse_windows_route_print(input: &str) -> Vec<RouteEntry> {
 
     for line in input.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("IPv4 Route Table") {
+        if trimmed.starts_with("IPv4 Route Table") || trimmed.starts_with("IPv4 경로 테이블") {
             family = RouteFamily::Ipv4;
             in_active_routes = false;
             pending_ipv6 = None;
             continue;
         }
-        if trimmed.starts_with("IPv6 Route Table") {
+        if trimmed.starts_with("IPv6 Route Table") || trimmed.starts_with("IPv6 경로 테이블") {
             family = RouteFamily::Ipv6;
             in_active_routes = false;
             pending_ipv6 = None;
             continue;
         }
-        if trimmed.starts_with("Active Routes:") {
+        if trimmed.starts_with("Active Routes:") || trimmed.starts_with("활성 경로:") {
             in_active_routes = true;
             continue;
         }
-        if trimmed.starts_with("Persistent Routes:") {
+        if trimmed.starts_with("Persistent Routes:") || trimmed.starts_with("영구 경로:") {
             in_active_routes = false;
             continue;
         }
         if !in_active_routes
             || trimmed.is_empty()
             || trimmed.starts_with("Network")
+            || trimmed.starts_with("네트워크")
             || trimmed.starts_with("If ")
             || trimmed.starts_with('=')
         {
@@ -378,5 +382,42 @@ Active Routes:
         assert_eq!(routes[4].destination, "2001:4860::8888/128");
         assert_eq!(routes[4].gateway, "On-link");
         assert_eq!(routes[4].interface, "12");
+    }
+
+    #[test]
+    fn test_parse_korean_windows_route_print() {
+        let sample = "\
+===========================================================================
+인터페이스 목록
+ 16...a0 02 a5 78 76 7f ......Intel(R) Wi-Fi 6 AX101
+===========================================================================
+
+IPv4 경로 테이블
+===========================================================================
+활성 경로:
+네트워크 대상        넷마스크          게이트웨이       인터페이스  메트릭
+          0.0.0.0          0.0.0.0  192.168.200.254  192.168.200.154     35
+    192.168.200.0    255.255.255.0         On-link   192.168.200.154    291
+===========================================================================
+영구 경로:
+  없음
+
+IPv6 경로 테이블
+===========================================================================
+활성 경로:
+ If Metric Network Destination      Gateway
+ 16    291 fe80::/64                On-link
+";
+
+        let routes = parse_routes(sample);
+
+        assert_eq!(routes.len(), 3);
+        assert_eq!(routes[0].destination, "default");
+        assert_eq!(routes[0].gateway, "192.168.200.254");
+        assert_eq!(routes[0].interface, "192.168.200.154");
+        assert_eq!(routes[1].destination, "192.168.200.0/24");
+        assert_eq!(routes[2].destination, "fe80::/64");
+        assert_eq!(routes[2].interface, "16");
+        assert_eq!(routes[2].family, RouteFamily::Ipv6);
     }
 }
