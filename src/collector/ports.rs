@@ -1,4 +1,5 @@
 use crate::model::ListeningPort;
+use std::collections::HashMap;
 
 pub fn parse_listening_ports(input: &str) -> Vec<ListeningPort> {
     if looks_like_windows_netstat(input) {
@@ -48,6 +49,66 @@ pub fn parse_listening_ports(input: &str) -> Vec<ListeningPort> {
     }
 
     ports
+}
+
+pub fn enrich_listening_ports_with_processes(ports: &mut [ListeningPort], tasklist_csv: &str) {
+    let processes = parse_tasklist_processes(tasklist_csv);
+
+    for port in ports {
+        if let Some(command) = processes.get(port.pid.as_str()) {
+            port.command = command.clone();
+        }
+    }
+}
+
+fn parse_tasklist_processes(input: &str) -> HashMap<String, String> {
+    let mut processes = HashMap::new();
+
+    for line in input.lines() {
+        let fields = parse_csv_row(line);
+        if fields.len() < 2 {
+            continue;
+        }
+
+        let image_name = fields[0].trim();
+        let pid = fields[1].trim();
+        if image_name.is_empty()
+            || pid.is_empty()
+            || image_name.eq_ignore_ascii_case("Image Name")
+            || pid.eq_ignore_ascii_case("PID")
+        {
+            continue;
+        }
+
+        processes.insert(pid.to_string(), image_name.to_string());
+    }
+
+    processes
+}
+
+fn parse_csv_row(line: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut field = String::new();
+    let mut chars = line.chars().peekable();
+    let mut in_quotes = false;
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' if in_quotes && chars.peek() == Some(&'"') => {
+                field.push('"');
+                chars.next();
+            }
+            '"' => in_quotes = !in_quotes,
+            ',' if !in_quotes => {
+                fields.push(field);
+                field = String::new();
+            }
+            _ => field.push(ch),
+        }
+    }
+
+    fields.push(field);
+    fields
 }
 
 fn looks_like_windows_netstat(input: &str) -> bool {
@@ -307,5 +368,36 @@ Active Connections
         assert_eq!(ports[0].local_ip, "127.0.0.1");
         assert_eq!(ports[0].local_port, "5050");
         assert_eq!(ports[0].pid, "2460");
+    }
+
+    #[test]
+    fn enriches_windows_ports_with_tasklist_process_names() {
+        let mut ports = vec![
+            ListeningPort {
+                proto: "tcp".to_string(),
+                local_ip: "127.0.0.1".to_string(),
+                local_port: "5050".to_string(),
+                pid: "2460".to_string(),
+                command: "pid:2460".to_string(),
+                user: "-".to_string(),
+            },
+            ListeningPort {
+                proto: "tcp".to_string(),
+                local_ip: "127.0.0.1".to_string(),
+                local_port: "27015".to_string(),
+                pid: "16052".to_string(),
+                command: "pid:16052".to_string(),
+                user: "-".to_string(),
+            },
+        ];
+        let tasklist = "\
+\"python.exe\",\"2460\",\"Console\",\"1\",\"12,344 K\"
+\"steam.exe\",\"16052\",\"Console\",\"1\",\"101,208 K\"
+";
+
+        enrich_listening_ports_with_processes(&mut ports, tasklist);
+
+        assert_eq!(ports[0].command, "python.exe");
+        assert_eq!(ports[1].command, "steam.exe");
     }
 }

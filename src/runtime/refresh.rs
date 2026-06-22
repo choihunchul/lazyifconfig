@@ -1,7 +1,7 @@
 use crate::app::App;
 use crate::collector::connections::parse_connections;
 use crate::collector::interface::{merge_gateways, parse_interfaces};
-use crate::collector::ports::parse_listening_ports;
+use crate::collector::ports::{enrich_listening_ports_with_processes, parse_listening_ports};
 use crate::collector::routes::parse_routes;
 use crate::collector::stats::merge_stats;
 use crate::collector::system::collect_process_metrics;
@@ -105,11 +105,12 @@ pub fn tick_update(app: &mut App) -> Result<(), String> {
         listening_ports_command.program,
         listening_ports_command.args,
     );
-    let listening_ports = if let Ok(ports_out) = &ports_res {
+    let mut listening_ports = if let Ok(ports_out) = &ports_res {
         parse_listening_ports(ports_out)
     } else {
         Vec::new()
     };
+    enrich_windows_listening_ports(&mut listening_ports);
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -234,6 +235,21 @@ pub fn tick_update(app: &mut App) -> Result<(), String> {
         captured_at_secs: now,
     });
     Ok(())
+}
+
+fn enrich_windows_listening_ports(listening_ports: &mut [crate::model::ListeningPort]) {
+    if !cfg!(target_os = "windows") || listening_ports.is_empty() {
+        return;
+    }
+
+    let Ok(output) = run_command_capture("tasklist", &["/fo", "csv", "/nh"]) else {
+        return;
+    };
+    let Ok(stdout) = command_stdout(&output) else {
+        return;
+    };
+
+    enrich_listening_ports_with_processes(listening_ports, &stdout);
 }
 
 fn capture_command_output(
