@@ -22,6 +22,12 @@ pub enum ConnectionDetailsSection {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PortDetailsSection {
+    Summary,
+    Detail,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewMode {
     Interface,
     Network,
@@ -346,6 +352,7 @@ pub struct App {
     pub pending_tool_results: PendingToolResults,
     pub route_inspector: RouteInspectorState,
     pub connection_details_section: ConnectionDetailsSection,
+    pub port_details_section: PortDetailsSection,
     pub pending_port_action: Option<PortProcessConfirmation>,
     pub quit_confirmation_active: bool,
 }
@@ -446,6 +453,7 @@ impl Default for App {
             pending_tool_results: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             route_inspector: RouteInspectorState::default(),
             connection_details_section: ConnectionDetailsSection::Summary,
+            port_details_section: PortDetailsSection::Summary,
             pending_port_action: None,
             quit_confirmation_active: false,
         }
@@ -574,6 +582,7 @@ impl App {
             ViewMode::Connections => {
                 self.connection_details_section = ConnectionDetailsSection::Summary
             }
+            ViewMode::Ports => self.port_details_section = PortDetailsSection::Summary,
             _ => {}
         }
         self.update_navigation_items();
@@ -912,6 +921,18 @@ impl App {
             ConnectionDetailsSection::Whois => ConnectionDetailsSection::Summary,
         };
         self.details_scroll = 0;
+    }
+
+    pub fn select_next_port_details_section(&mut self) {
+        self.port_details_section = match self.port_details_section {
+            PortDetailsSection::Summary => PortDetailsSection::Detail,
+            PortDetailsSection::Detail => PortDetailsSection::Summary,
+        };
+        self.details_scroll = 0;
+    }
+
+    pub fn select_previous_port_details_section(&mut self) {
+        self.select_next_port_details_section();
     }
 
     pub fn select_connection_details_section_by_index(&mut self, index: usize) {

@@ -674,16 +674,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Char('l') | KeyCode::Right | KeyCode::Char('ㅣ') => {
                             app.help_visible = false;
                             app.select_next_view_mode();
+                            if app.view_mode == ViewMode::Ports {
+                                let _ = tick_update(&mut app);
+                                last_tick = std::time::Instant::now();
+                            }
                         }
                         KeyCode::Char('h') | KeyCode::Left | KeyCode::Char('ㅗ') => {
                             app.help_visible = false;
                             app.select_previous_view_mode();
+                            if app.view_mode == ViewMode::Ports {
+                                let _ = tick_update(&mut app);
+                                last_tick = std::time::Instant::now();
+                            }
                         }
                         KeyCode::Tab => {
                             if app.view_mode == ViewMode::Routes {
                                 app.select_next_route_section();
                             } else if app.view_mode == ViewMode::Connections {
                                 app.select_next_connection_details_section();
+                            } else if app.view_mode == ViewMode::Ports {
+                                app.select_next_port_details_section();
+                                if app.port_details_section
+                                    == lazyifconfig::app::PortDetailsSection::Detail
+                                {
+                                    let _ = tick_update(&mut app);
+                                    last_tick = std::time::Instant::now();
+                                }
                             }
                         }
                         KeyCode::BackTab => {
@@ -691,6 +707,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 app.select_previous_route_section();
                             } else if app.view_mode == ViewMode::Connections {
                                 app.select_previous_connection_details_section();
+                            } else if app.view_mode == ViewMode::Ports {
+                                app.select_previous_port_details_section();
+                                if app.port_details_section
+                                    == lazyifconfig::app::PortDetailsSection::Detail
+                                {
+                                    let _ = tick_update(&mut app);
+                                    last_tick = std::time::Instant::now();
+                                }
                             }
                         }
                         KeyCode::Home => {
@@ -806,6 +830,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Char('p') | KeyCode::Char('ㅔ') => {
                             app.help_visible = false;
                             app.set_view_mode(ViewMode::Ports);
+                            let _ = tick_update(&mut app);
+                            last_tick = std::time::Instant::now();
                         }
                         KeyCode::Char('e') | KeyCode::Char('ㄷ') => {
                             app.help_visible = false;

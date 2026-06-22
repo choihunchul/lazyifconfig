@@ -1,4 +1,4 @@
-use lazyifconfig::app::{App, PortProcessAction};
+use lazyifconfig::app::{App, PortDetailsSection, PortProcessAction, ViewMode};
 use lazyifconfig::model::{
     ActiveConnection, InterfaceAddress, InterfaceStats, InterfaceStatus, InterfaceType,
     ListeningPort, NetworkEvent, NetworkInterface, NetworkSnapshot,
@@ -1179,4 +1179,19 @@ fn test_raw_viewer_search_highlights() {
     assert!(line_content.is_char_boundary(m.start_byte));
     assert!(line_content.is_char_boundary(m.end_byte));
     assert_eq!(&line_content[m.start_byte..m.end_byte], "테스트");
+}
+
+#[test]
+fn port_details_section_defaults_to_summary_and_toggles() {
+    let mut app = App::default();
+
+    app.set_view_mode(ViewMode::Ports);
+
+    assert_eq!(app.port_details_section, PortDetailsSection::Summary);
+
+    app.select_next_port_details_section();
+    assert_eq!(app.port_details_section, PortDetailsSection::Detail);
+
+    app.select_previous_port_details_section();
+    assert_eq!(app.port_details_section, PortDetailsSection::Summary);
 }

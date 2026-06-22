@@ -139,6 +139,15 @@ pub(super) fn connection_details_section_tabs(app: &App) -> Line<'static> {
     detail_section_tabs(&[("Summary", 1), ("Whois", 2)], active_index)
 }
 
+pub(super) fn port_details_section_tabs(app: &App) -> Line<'static> {
+    let active_index = match app.port_details_section {
+        PortDetailsSection::Summary => 0,
+        PortDetailsSection::Detail => 1,
+    };
+
+    detail_section_tabs(&[("Summary", 1), ("Detail", 2)], active_index)
+}
+
 fn is_remote_connection_target(ip: &str) -> bool {
     ip != "*" && ip != "::" && ip != "0.0.0.0" && ip != "*.*"
 }
@@ -289,9 +298,13 @@ pub(super) fn port_summary_lines(
     proto: &str,
     port: &str,
     pid: &str,
+    command: &str,
     user: &str,
+    ports: Vec<(&str, &str)>,
 ) -> Vec<Line<'static>> {
-    vec![
+    let label_style = Style::default().add_modifier(Modifier::BOLD);
+    let port_style = Style::default().fg(Color::Yellow);
+    let mut lines = vec![
         Line::from(Span::styled(
             "=== Port Summary ===",
             Style::default()
@@ -312,12 +325,31 @@ pub(super) fn port_summary_lines(
             Span::raw(pid.to_string()),
         ]),
         Line::from(vec![
+            Span::styled("Command: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(command.to_string()),
+        ]),
+        Line::from(vec![
             Span::styled("User:     ", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(user.to_string()),
         ]),
         Line::from(""),
-        Line::from("Press Tab for process details."),
-    ]
+        Line::from(Span::styled("Ports", label_style)),
+    ];
+
+    for (index, (port, _proto)) in ports.iter().enumerate() {
+        let branch = if index + 1 == ports.len() {
+            " └─ "
+        } else {
+            " ├─ "
+        };
+        lines.push(Line::from(vec![
+            Span::raw(branch),
+            Span::styled((*port).to_string(), port_style),
+            Span::raw(" LISTEN"),
+        ]));
+    }
+
+    lines
 }
 
 pub(super) struct PortProcessLinesInput<'a> {
@@ -357,12 +389,24 @@ pub(super) fn port_process_lines(input: PortProcessLinesInput<'_>) -> Vec<Line<'
 
     if let Some(process) = input.process {
         if process.executable.is_some()
+            || process.command_line.is_some()
+            || process.service.is_some()
             || process.working_dir.is_some()
             || process.started.is_some()
         {
             lines.push(Line::from(""));
             if let Some(executable) = &process.executable {
                 lines.push(process_value_line("Executable", executable, label_style));
+            }
+            if let Some(command_line) = &process.command_line {
+                lines.push(process_value_line(
+                    "Command Line",
+                    command_line,
+                    label_style,
+                ));
+            }
+            if let Some(service) = &process.service {
+                lines.push(process_value_line("Service", service, label_style));
             }
             if let Some(working_dir) = &process.working_dir {
                 lines.push(process_value_line("Working Dir", working_dir, label_style));

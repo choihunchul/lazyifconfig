@@ -101,6 +101,8 @@ pub struct ListeningPort {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProcessDetails {
     pub executable: Option<String>,
+    pub command_line: Option<String>,
+    pub service: Option<String>,
     pub working_dir: Option<String>,
     pub started: Option<String>,
     pub cpu_usage_tenths: Option<u16>,

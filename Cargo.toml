@@ -1,6 +1,6 @@
 [package]
 name = "lazyifconfig"
-version = "0.2.19"
+version = "0.2.20"
 edition = "2021"
 description = "Terminal UI for inspecting local network state"
 readme = "README.md"
@@ -32,4 +32,4 @@ webpki-roots = "0.26"
 x509-parser = "0.17"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Globalization"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading"] }

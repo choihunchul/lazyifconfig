@@ -1,10 +1,13 @@
 use crate::app::App;
+use crate::app::ViewMode;
 use crate::collector::connections::parse_connections;
 use crate::collector::interface::{merge_gateways, parse_interfaces};
 use crate::collector::ports::{enrich_listening_ports_with_processes, parse_listening_ports};
 use crate::collector::routes::parse_routes;
 use crate::collector::stats::merge_stats;
-use crate::collector::system::{collect_process_details, collect_process_metrics};
+use crate::collector::system::{
+    collect_process_details, collect_process_metrics, collect_windows_process_details_by_pid,
+};
 use crate::collector::windows::{
     merge_powershell_interface_stats, parse_powershell_connections, parse_powershell_interfaces,
     parse_powershell_listening_ports, parse_powershell_routes,
@@ -70,9 +73,7 @@ pub fn tick_update(app: &mut App) -> Result<(), String> {
 
     let connections = collect_connections(app);
 
-    let mut listening_ports = collect_listening_ports(app);
-    enrich_windows_listening_ports(&mut listening_ports);
-    enrich_listening_port_process_details(&mut listening_ports);
+    let listening_ports = collect_or_reuse_listening_ports(app);
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -433,6 +434,66 @@ fn collect_listening_ports(app: &mut App) -> Vec<crate::model::ListeningPort> {
         .unwrap_or_default()
 }
 
+fn collect_or_reuse_listening_ports(app: &mut App) -> Vec<crate::model::ListeningPort> {
+    if !should_collect_listening_ports(app.view_mode) {
+        return app
+            .current_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.listening_ports.clone())
+            .unwrap_or_default();
+    }
+
+    let detail_pid =
+        selected_port_detail_pid(app).filter(|_| should_collect_port_process_details(app));
+    let cached_detail = detail_pid
+        .as_deref()
+        .and_then(|pid| cached_port_process_details(app, pid));
+    let mut listening_ports = collect_listening_ports(app);
+    enrich_windows_listening_ports(&mut listening_ports);
+    let detail_pid = detail_pid.or_else(|| {
+        should_collect_port_process_details(app)
+            .then(|| {
+                listening_ports
+                    .first()
+                    .map(|port| port.pid.clone())
+                    .filter(|pid| !pid.is_empty() && pid != "-")
+            })
+            .flatten()
+    });
+    if let (Some(detail_pid), Some(cached_detail)) = (detail_pid.as_deref(), cached_detail) {
+        attach_process_details(&mut listening_ports, detail_pid, cached_detail);
+    } else {
+        enrich_listening_port_process_details(&mut listening_ports, detail_pid.as_deref());
+    }
+    listening_ports
+}
+
+fn should_collect_listening_ports(view_mode: ViewMode) -> bool {
+    view_mode == ViewMode::Ports
+}
+
+fn should_collect_port_process_details(app: &App) -> bool {
+    app.view_mode == ViewMode::Ports
+        && app.port_details_section == crate::app::PortDetailsSection::Detail
+}
+
+fn selected_port_detail_pid(app: &App) -> Option<String> {
+    match app.navigation_items.get(app.selected_index) {
+        Some(crate::app::NavigationItem::ListeningPort { pid, .. }) => Some(pid.clone()),
+        _ => None,
+    }
+    .filter(|pid| !pid.is_empty() && pid != "-")
+}
+
+fn cached_port_process_details(app: &App, pid: &str) -> Option<crate::model::ProcessDetails> {
+    app.current_snapshot
+        .as_ref()?
+        .listening_ports
+        .iter()
+        .find(|port| port.pid == pid)
+        .and_then(|port| port.process.clone())
+}
+
 fn capture_powershell_output(
     app: &mut App,
     source_id: CommandSourceId,
@@ -542,9 +603,28 @@ fn merge_additional_route_output(
     routes
 }
 
-fn enrich_listening_port_process_details(ports: &mut [crate::model::ListeningPort]) {
+fn enrich_listening_port_process_details(
+    ports: &mut [crate::model::ListeningPort],
+    detail_pid: Option<&str>,
+) {
+    let Some(detail_pid) = detail_pid else {
+        return;
+    };
+
+    if cfg!(target_os = "windows") {
+        let pids = vec![detail_pid.to_string()];
+        let details_by_pid = collect_windows_process_details_by_pid(&pids);
+        if let Some(details) = details_by_pid.get(detail_pid).cloned() {
+            attach_process_details(ports, detail_pid, details);
+        }
+        return;
+    }
+
     let mut details_by_pid = HashMap::new();
     for port in ports.iter_mut() {
+        if port.pid != detail_pid {
+            continue;
+        }
         if port.process.is_some() {
             continue;
         }
@@ -556,10 +636,22 @@ fn enrich_listening_port_process_details(ports: &mut [crate::model::ListeningPor
     }
 }
 
+fn attach_process_details(
+    ports: &mut [crate::model::ListeningPort],
+    detail_pid: &str,
+    details: crate::model::ProcessDetails,
+) {
+    for port in ports.iter_mut() {
+        if port.pid == detail_pid && port.process.is_none() {
+            port.process = Some(details.clone());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::RouteFamily;
+    use crate::model::{ListeningPort, ProcessDetails, RouteFamily};
 
     #[test]
     fn additional_linux_ipv6_route_output_is_merged_into_snapshot_routes() {
@@ -572,6 +664,67 @@ mod tests {
 
         assert!(merged.iter().any(|route| route.family == RouteFamily::Ipv6));
         assert_eq!(merged.len(), 3);
+    }
+
+    #[test]
+    fn listening_ports_are_collected_only_for_ports_view() {
+        assert!(should_collect_listening_ports(ViewMode::Ports));
+        assert!(!should_collect_listening_ports(ViewMode::Interface));
+        assert!(!should_collect_listening_ports(ViewMode::Network));
+        assert!(!should_collect_listening_ports(ViewMode::Connections));
+        assert!(!should_collect_listening_ports(ViewMode::Routes));
+        assert!(!should_collect_listening_ports(ViewMode::Tools));
+        assert!(!should_collect_listening_ports(ViewMode::Timeline));
+    }
+
+    #[test]
+    fn selected_port_detail_pid_uses_current_navigation_item() {
+        let mut app = App::default();
+        app.navigation_items = vec![crate::app::NavigationItem::ListeningPort {
+            proto: "tcp".to_string(),
+            port: "5050".to_string(),
+            command: "python.exe".to_string(),
+            pid: "2460".to_string(),
+            user: "-".to_string(),
+            index: 0,
+        }];
+
+        assert_eq!(selected_port_detail_pid(&app).as_deref(), Some("2460"));
+    }
+
+    #[test]
+    fn cached_process_details_are_reused_for_selected_pid() {
+        let mut app = App::default();
+        app.current_snapshot = Some(crate::model::NetworkSnapshot {
+            interfaces: vec![],
+            connections: vec![],
+            listening_ports: vec![ListeningPort {
+                proto: "tcp".to_string(),
+                local_ip: "127.0.0.1".to_string(),
+                local_port: "5050".to_string(),
+                pid: "2460".to_string(),
+                command: "python.exe".to_string(),
+                user: "-".to_string(),
+                process: Some(ProcessDetails {
+                    executable: Some("C:\\Python312\\python.exe".to_string()),
+                    command_line: Some("python -m http.server 5050".to_string()),
+                    ..ProcessDetails::default()
+                }),
+            }],
+            routes: vec![],
+            captured_at_secs: 0,
+        });
+
+        let cached = cached_port_process_details(&app, "2460").expect("cached process");
+
+        assert_eq!(
+            cached.executable.as_deref(),
+            Some("C:\\Python312\\python.exe")
+        );
+        assert_eq!(
+            cached.command_line.as_deref(),
+            Some("python -m http.server 5050")
+        );
     }
 
     #[cfg(not(target_os = "windows"))]
