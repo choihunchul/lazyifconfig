@@ -34,8 +34,8 @@ use details::{
     render_route_inspector_details, resolve_connection_interface, route_family_label,
 };
 use overlays::{
-    build_command_panel, command_panel_height, draw_help, draw_raw_viewer,
-    draw_release_notes_viewer,
+    build_command_panel, command_panel_height, draw_help, draw_port_action_confirmation,
+    draw_quit_confirmation, draw_raw_viewer, draw_release_notes_viewer,
 };
 use tables::{format_endpoint, render_connections_table, render_ports_table, render_routes_table};
 use tools::{render_tools_input_modal, render_tools_view};
@@ -1105,6 +1105,14 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if app.view_mode == ViewMode::Tools && app.tools.input_modal_open {
         render_tools_input_modal(frame, app);
     }
+
+    if app.pending_port_action.is_some() {
+        draw_port_action_confirmation(frame, app);
+    }
+
+    if app.quit_confirmation_active {
+        draw_quit_confirmation(frame, app);
+    }
 }
 
 #[cfg(test)]
@@ -1845,6 +1853,50 @@ mod tests {
         assert!(rendered.contains("PRESS U TO INSTALL"));
         assert!(rendered.contains("v9.9.9"));
         assert!(rendered.contains("Big networking refresh"));
+    }
+
+    #[test]
+    fn test_update_updated_renders_restart_action() {
+        let mut app = App::default();
+        app.update_status = crate::update::UpdateStatus::Updated {
+            version: "9.9.9".to_string(),
+        };
+
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("UPDATE INSTALLED"));
+        assert!(rendered.contains("PRESS X TO RESTART"));
+    }
+
+    #[test]
+    fn test_quit_confirmation_renders_ctrl_c_prompt() {
+        let mut app = App::default();
+        app.arm_quit_confirmation();
+
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("Press Ctrl+C again to quit."));
+        assert!(rendered.contains("Esc/N cancel"));
     }
 
     #[test]

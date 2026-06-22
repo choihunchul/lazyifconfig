@@ -48,6 +48,33 @@ pub enum PortSortColumn {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PortProcessAction {
+    Kill,
+    Restart,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PortProcessConfirmation {
+    pub action: PortProcessAction,
+    pub command: String,
+    pub port: String,
+    pub pid: String,
+}
+
+impl PortProcessConfirmation {
+    pub fn confirmation_text(&self) -> String {
+        let action = match self.action {
+            PortProcessAction::Kill => "Kill",
+            PortProcessAction::Restart => "Restart",
+        };
+        format!(
+            "{action} {} port:{} pid {}?",
+            self.command, self.port, self.pid
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectionSortColumn {
     Local,
     Foreign,
@@ -326,6 +353,8 @@ pub struct App {
     pub route_inspector: RouteInspectorState,
     pub port_details_section: PortDetailsSection,
     pub connection_details_section: ConnectionDetailsSection,
+    pub pending_port_action: Option<PortProcessConfirmation>,
+    pub quit_confirmation_active: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -425,6 +454,8 @@ impl Default for App {
             route_inspector: RouteInspectorState::default(),
             port_details_section: PortDetailsSection::Summary,
             connection_details_section: ConnectionDetailsSection::Summary,
+            pending_port_action: None,
+            quit_confirmation_active: false,
         }
     }
 }
@@ -865,6 +896,40 @@ impl App {
             PortDetailsSection::Process
         };
         self.details_scroll = 0;
+    }
+
+    pub fn open_selected_port_action_confirmation(&mut self) {
+        let Some(NavigationItem::ListeningPort {
+            command, port, pid, ..
+        }) = self.navigation_items.get(self.selected_index)
+        else {
+            return;
+        };
+
+        self.pending_port_action = Some(PortProcessConfirmation {
+            action: PortProcessAction::Kill,
+            command: command.clone(),
+            port: port.clone(),
+            pid: pid.clone(),
+        });
+    }
+
+    pub fn set_pending_port_action(&mut self, action: PortProcessAction) {
+        if let Some(confirmation) = &mut self.pending_port_action {
+            confirmation.action = action;
+        }
+    }
+
+    pub fn cancel_pending_port_action(&mut self) {
+        self.pending_port_action = None;
+    }
+
+    pub fn arm_quit_confirmation(&mut self) {
+        self.quit_confirmation_active = true;
+    }
+
+    pub fn cancel_quit_confirmation(&mut self) {
+        self.quit_confirmation_active = false;
     }
 
     pub fn select_next_connection_details_section(&mut self) {

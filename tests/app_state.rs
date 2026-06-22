@@ -1,4 +1,4 @@
-use lazyifconfig::app::App;
+use lazyifconfig::app::{App, PortProcessAction};
 use lazyifconfig::model::{
     ActiveConnection, InterfaceAddress, InterfaceStats, InterfaceStatus, InterfaceType,
     ListeningPort, NetworkEvent, NetworkInterface, NetworkSnapshot,
@@ -291,6 +291,83 @@ fn ports_sort_column_cycles_and_direction_toggles() {
         other => panic!("expected port item, got {other:?}"),
     };
     assert_eq!(first_command, "zulu");
+}
+
+#[test]
+fn port_action_confirmation_tracks_selected_process() {
+    let mut app = App::default();
+    app.view_mode = lazyifconfig::app::ViewMode::Ports;
+    app.replace_snapshot(snapshot_with_ports(vec![listening_port(
+        "tcp",
+        "5050",
+        "powershell.exe",
+        "17060",
+        "-",
+    )]));
+
+    app.open_selected_port_action_confirmation();
+
+    let confirmation = app.pending_port_action.as_ref().unwrap();
+    assert_eq!(confirmation.action, PortProcessAction::Kill);
+    assert_eq!(confirmation.command, "powershell.exe");
+    assert_eq!(confirmation.port, "5050");
+    assert_eq!(confirmation.pid, "17060");
+    assert_eq!(
+        confirmation.confirmation_text(),
+        "Kill powershell.exe port:5050 pid 17060?"
+    );
+}
+
+#[test]
+fn port_kill_confirmation_can_cancel() {
+    let mut app = App::default();
+    app.view_mode = lazyifconfig::app::ViewMode::Ports;
+    app.replace_snapshot(snapshot_with_ports(vec![listening_port(
+        "tcp",
+        "5050",
+        "powershell.exe",
+        "17060",
+        "-",
+    )]));
+
+    app.open_selected_port_action_confirmation();
+
+    app.cancel_pending_port_action();
+    assert!(app.pending_port_action.is_none());
+}
+
+#[test]
+fn port_action_confirmation_can_switch_to_restart() {
+    let mut app = App::default();
+    app.view_mode = lazyifconfig::app::ViewMode::Ports;
+    app.replace_snapshot(snapshot_with_ports(vec![listening_port(
+        "tcp",
+        "5050",
+        "powershell.exe",
+        "17060",
+        "-",
+    )]));
+
+    app.open_selected_port_action_confirmation();
+    app.set_pending_port_action(PortProcessAction::Restart);
+
+    let confirmation = app.pending_port_action.as_ref().unwrap();
+    assert_eq!(confirmation.action, PortProcessAction::Restart);
+    assert_eq!(
+        confirmation.confirmation_text(),
+        "Restart powershell.exe port:5050 pid 17060?"
+    );
+}
+
+#[test]
+fn quit_confirmation_arms_and_cancels() {
+    let mut app = App::default();
+
+    app.arm_quit_confirmation();
+    assert!(app.quit_confirmation_active);
+
+    app.cancel_quit_confirmation();
+    assert!(!app.quit_confirmation_active);
 }
 
 #[test]

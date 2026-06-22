@@ -160,7 +160,7 @@ pub(super) fn build_command_panel(app: &App) -> (Vec<Line<'static>>, Style) {
                 ),
                 Span::raw(" "),
                 Span::styled(
-                    "restart app",
+                    "PRESS X TO RESTART",
                     Style::default()
                         .fg(Color::White)
                         .add_modifier(Modifier::BOLD),
@@ -224,6 +224,94 @@ pub(super) fn build_command_panel(app: &App) -> (Vec<Line<'static>>, Style) {
             Style::default(),
         ),
     }
+}
+
+pub(super) fn draw_port_action_confirmation(frame: &mut Frame, app: &App) {
+    let Some(confirmation) = &app.pending_port_action else {
+        return;
+    };
+
+    let area = get_centered_rect(52, 24, frame.size());
+    let block = Block::default()
+        .title(" Port Process Action ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .style(Style::default().bg(Color::Black).fg(Color::White));
+    let inner = block.inner(area);
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+
+    let lines = vec![
+        Line::from(Span::styled(
+            confirmation.confirmation_text(),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled(
+                "Y",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" confirm   "),
+            Span::styled(
+                "R",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" switch to restart   "),
+            Span::styled(
+                "Esc/N",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" cancel"),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: true })
+        .style(Style::default().bg(Color::Black).fg(Color::White));
+    frame.render_widget(paragraph, inner);
+}
+
+pub(super) fn draw_quit_confirmation(frame: &mut Frame, app: &App) {
+    if !app.quit_confirmation_active {
+        return;
+    }
+
+    let area = get_centered_rect(46, 28, frame.size());
+    let block = Block::default()
+        .title(" Exit ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red))
+        .style(Style::default().bg(Color::Black).fg(Color::White));
+    let inner = block.inner(area);
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+
+    let lines = vec![
+        Line::from(Span::styled(
+            "Press Ctrl+C again to quit.",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::raw(""),
+        Line::from("Esc/N cancel"),
+    ];
+
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: true })
+        .style(Style::default().bg(Color::Black).fg(Color::White));
+    frame.render_widget(paragraph, inner);
 }
 
 fn truncate_release_notes(notes: &str, max_chars: usize) -> String {

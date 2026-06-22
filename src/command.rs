@@ -431,6 +431,23 @@ pub fn run_kill(pid: &str) -> Result<(), String> {
     }
 }
 
+pub fn run_restart_process(pid: &str) -> Result<(), String> {
+    let spec = restart_process_command_spec_for_os(std::env::consts::OS, pid);
+    let args: Vec<&str> = spec.args.iter().map(String::as_str).collect();
+    let output = run_command_capture(&spec.program, &args)?;
+
+    if output.exit_code == Some(0) {
+        Ok(())
+    } else {
+        let message = if output.stderr.trim().is_empty() {
+            output.stdout.trim()
+        } else {
+            output.stderr.trim()
+        };
+        Err(message.to_string())
+    }
+}
+
 pub fn kill_command_spec_for_os(os: &str, pid: &str) -> OwnedCommandSpec {
     if os == "windows" {
         OwnedCommandSpec {
@@ -443,6 +460,42 @@ pub fn kill_command_spec_for_os(os: &str, pid: &str) -> OwnedCommandSpec {
             display: format!("kill -9 {pid}"),
             program: "kill".to_string(),
             args: vec!["-9".to_string(), pid.to_string()],
+        }
+    }
+}
+
+pub fn restart_process_command_spec_for_os(os: &str, pid: &str) -> OwnedCommandSpec {
+    if os == "windows" {
+        let script = format!(
+            "$p = Get-CimInstance Win32_Process -Filter 'ProcessId={pid}'; \
+             if ($null -eq $p) {{ Write-Error 'process not found'; exit 1 }}; \
+             $cmd = $p.CommandLine; \
+             if ([string]::IsNullOrWhiteSpace($cmd)) {{ Write-Error 'process command line is unavailable; administrator permission may be required'; exit 1 }}; \
+             Stop-Process -Id {pid} -Force -ErrorAction Stop; \
+             Start-Process -FilePath 'cmd.exe' -ArgumentList @('/C', 'start', '\"\"', $cmd)"
+        );
+        OwnedCommandSpec {
+            display: format!("restart PID {pid}"),
+            program: "powershell".to_string(),
+            args: vec![
+                "-NoProfile".to_string(),
+                "-ExecutionPolicy".to_string(),
+                "Bypass".to_string(),
+                "-Command".to_string(),
+                script,
+            ],
+        }
+    } else {
+        let script = format!(
+            "cmd=$(ps -p {pid} -o command=); \
+             if [ -z \"$cmd\" ]; then echo 'process command line is unavailable' >&2; exit 1; fi; \
+             kill -9 {pid}; \
+             nohup sh -c \"$cmd\" >/dev/null 2>&1 &"
+        );
+        OwnedCommandSpec {
+            display: format!("restart pid {pid}"),
+            program: "sh".to_string(),
+            args: vec!["-c".to_string(), script],
         }
     }
 }
@@ -612,6 +665,22 @@ mod tests {
         assert_eq!(unix.display, "kill -9 1234");
         assert_eq!(unix.program, "kill");
         assert_eq!(unix.args, vec!["-9", "1234"]);
+    }
+
+    #[test]
+    fn restart_process_command_uses_platform_command() {
+        let windows = restart_process_command_spec_for_os("windows", "1234");
+        assert_eq!(windows.program, "powershell");
+        assert!(windows.display.contains("restart PID 1234"));
+        assert!(windows
+            .args
+            .iter()
+            .any(|arg| arg.contains("Get-CimInstance")));
+
+        let unix = restart_process_command_spec_for_os("linux", "1234");
+        assert_eq!(unix.program, "sh");
+        assert!(unix.display.contains("restart pid 1234"));
+        assert!(unix.args.iter().any(|arg| arg.contains("ps -p 1234")));
     }
 
     #[test]

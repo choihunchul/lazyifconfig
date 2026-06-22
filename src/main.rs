@@ -1,10 +1,10 @@
 use crossterm::{
-    event::{self, Event, KeyCode},
+    event::{self, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use lazyifconfig::app::{App, NavigationItem, ViewMode};
-use lazyifconfig::command::run_kill;
+use lazyifconfig::app::{App, NavigationItem, PortProcessAction, ViewMode};
+use lazyifconfig::command::{run_kill, run_restart_process};
 use lazyifconfig::model::{
     CommandSourceId, EventSeverity, NetworkEvent, NetworkEventKind, RouteInspectorSection,
 };
@@ -101,6 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut last_tick = std::time::Instant::now();
     let tick_rate = Duration::from_secs(2);
+    let mut restart_requested = false;
 
     loop {
         app.drain_pending_tool_results();
@@ -120,6 +121,101 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Event::Key(key) => {
                     if !lazyifconfig::input::should_handle_key_event(key) {
+                        continue;
+                    }
+
+                    let is_ctrl_c = matches!(key.code, KeyCode::Char('c' | 'C'))
+                        && key.modifiers.contains(KeyModifiers::CONTROL);
+
+                    if app.quit_confirmation_active {
+                        match key.code {
+                            KeyCode::Esc
+                            | KeyCode::Char('n')
+                            | KeyCode::Char('N')
+                            | KeyCode::Char('q')
+                            | KeyCode::Char('ㅂ') => {
+                                app.cancel_quit_confirmation();
+                            }
+                            _ if is_ctrl_c => break,
+                            _ => {}
+                        }
+                        continue;
+                    }
+
+                    if is_ctrl_c {
+                        app.arm_quit_confirmation();
+                        continue;
+                    }
+
+                    if app.pending_port_action.is_some() {
+                        match key.code {
+                            KeyCode::Esc
+                            | KeyCode::Char('q')
+                            | KeyCode::Char('ㅂ')
+                            | KeyCode::Char('n')
+                            | KeyCode::Char('N') => {
+                                app.cancel_pending_port_action();
+                            }
+                            KeyCode::Char('r') | KeyCode::Char('R') | KeyCode::Char('ㄱ') => {
+                                app.set_pending_port_action(PortProcessAction::Restart);
+                            }
+                            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                if let Some(confirmation) = app.pending_port_action.take() {
+                                    let result = match confirmation.action {
+                                        PortProcessAction::Kill => run_kill(&confirmation.pid),
+                                        PortProcessAction::Restart => {
+                                            run_restart_process(&confirmation.pid)
+                                        }
+                                    };
+                                    match result {
+                                        Ok(()) => {
+                                            let (kind, message) = match confirmation.action {
+                                                PortProcessAction::Kill => (
+                                                    NetworkEventKind::ProcessKilled,
+                                                    format!(
+                                                        "Killed {} (PID: {}) on :{}",
+                                                        confirmation.command,
+                                                        confirmation.pid,
+                                                        confirmation.port
+                                                    ),
+                                                ),
+                                                PortProcessAction::Restart => (
+                                                    NetworkEventKind::ProcessKilled,
+                                                    format!(
+                                                        "Restarted {} (PID: {}) on :{}",
+                                                        confirmation.command,
+                                                        confirmation.pid,
+                                                        confirmation.port
+                                                    ),
+                                                ),
+                                            };
+                                            app.push_event(NetworkEvent::new(
+                                                kind,
+                                                EventSeverity::Info,
+                                                message,
+                                            ));
+                                            let _ = tick_update(&mut app);
+                                            last_tick = std::time::Instant::now();
+                                        }
+                                        Err(error) => {
+                                            let action = match confirmation.action {
+                                                PortProcessAction::Kill => "Kill",
+                                                PortProcessAction::Restart => "Restart",
+                                            };
+                                            app.push_event(NetworkEvent::new(
+                                                NetworkEventKind::SystemError,
+                                                EventSeverity::Error,
+                                                format!(
+                                                    "{action} failed (PID: {}): {error}",
+                                                    confirmation.pid
+                                                ),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
                         continue;
                     }
 
@@ -548,6 +644,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             app.help_visible = false;
                             start_update_install(&mut app, true);
                         }
+                        KeyCode::Char('X') => {
+                            if matches!(
+                                app.update_status,
+                                lazyifconfig::update::UpdateStatus::Updated { .. }
+                            ) {
+                                restart_requested = true;
+                                break;
+                            }
+                        }
                         KeyCode::Char('R') => {
                             app.help_visible = false;
                             app.release_notes_viewer.active = true;
@@ -630,45 +735,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Char('K') => {
                             app.help_visible = false;
                             if app.view_mode == ViewMode::Ports {
-                                // Kill the selected process
-                                if let Some(NavigationItem::ListeningPort {
-                                    pid,
-                                    command,
-                                    port,
-                                    ..
-                                }) = app.navigation_items.get(app.selected_index)
-                                {
-                                    let pid = pid.clone();
-                                    let command = command.clone();
-                                    let port = port.clone();
-                                    match run_kill(&pid) {
-                                        Ok(()) => {
-                                            app.recent_events
-                                            .push(lazyifconfig::model::NetworkEvent::new(
-                                            lazyifconfig::model::NetworkEventKind::ProcessKilled,
-                                            lazyifconfig::model::EventSeverity::Info,
-                                            format!(
-                                                "Killed {} (PID: {}) on :{}",
-                                                command, pid, port
-                                            ),
-                                        ));
-                                            let _ = tick_update(&mut app);
-                                            last_tick = std::time::Instant::now();
-                                        }
-                                        Err(e) => {
-                                            app.recent_events
-                                                .push(lazyifconfig::model::NetworkEvent::new(
-                                                lazyifconfig::model::NetworkEventKind::SystemError,
-                                                lazyifconfig::model::EventSeverity::Error,
-                                                format!("Kill failed (PID: {}): {}", pid, e),
-                                            ));
-                                        }
-                                    }
-                                    if app.recent_events.len() > 100 {
-                                        let overflow = app.recent_events.len() - 100;
-                                        app.recent_events.drain(0..overflow);
-                                    }
-                                }
+                                app.open_selected_port_action_confirmation();
                             }
                         }
                         KeyCode::Char('/') => {
@@ -874,6 +941,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
+
+    if restart_requested {
+        let exe = std::env::current_exe()?;
+        let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+        std::process::Command::new(exe).args(args).spawn()?;
+    }
 
     Ok(())
 }
