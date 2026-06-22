@@ -6,8 +6,8 @@ use crate::collector::routes::parse_routes;
 use crate::collector::stats::merge_stats;
 use crate::collector::system::collect_process_metrics;
 use crate::collector::windows::{
-    parse_powershell_connections, parse_powershell_interfaces, parse_powershell_listening_ports,
-    parse_powershell_routes,
+    merge_powershell_interface_stats, parse_powershell_connections, parse_powershell_interfaces,
+    parse_powershell_listening_ports, parse_powershell_routes,
 };
 use crate::command::{
     default_route_command_spec, interface_command_spec, listening_ports_command_spec,
@@ -65,8 +65,7 @@ pub fn tick_update(app: &mut App) -> Result<(), String> {
         let _ = capture_owned_command_output(app, CommandSourceId::IpRules, &command);
     }
 
-    let stats_out = run_netstat_ib().unwrap_or_else(|_| raw_out.clone());
-    let merged = merge_stats(&stats_out, parsed);
+    let merged = collect_interface_stats(app, &raw_out, parsed);
 
     let connections = collect_connections(app);
 
@@ -202,6 +201,7 @@ const POWERSHELL_INTERFACES_COMMAND: &str = "$ErrorActionPreference='Stop'; Get-
 const POWERSHELL_ROUTES_COMMAND: &str = "$ErrorActionPreference='Stop'; Get-NetRoute | Select-Object DestinationPrefix,NextHop,InterfaceAlias,InterfaceIndex,RouteMetric,Protocol,AddressFamily | ConvertTo-Json -Depth 4 -Compress";
 const POWERSHELL_CONNECTIONS_COMMAND: &str = "$ErrorActionPreference='Stop'; Get-NetTCPConnection | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort,State | ConvertTo-Json -Depth 4 -Compress";
 const POWERSHELL_PORTS_COMMAND: &str = "$ErrorActionPreference='Stop'; Get-NetTCPConnection -State Listen | Select-Object LocalAddress,LocalPort,OwningProcess | ConvertTo-Json -Depth 4 -Compress";
+const POWERSHELL_INTERFACE_STATS_COMMAND: &str = "$ErrorActionPreference='Stop'; Get-NetAdapterStatistics | Select-Object Name,ReceivedBytes,SentBytes,ReceivedUnicastPackets,SentUnicastPackets | ConvertTo-Json -Depth 4 -Compress";
 
 fn collect_interfaces(
     app: &mut App,
@@ -297,6 +297,35 @@ fn collect_route_table_output(app: &mut App) -> Result<String, String> {
         route_table_command.program,
         route_table_command.args,
     )
+}
+
+fn collect_interface_stats(
+    app: &mut App,
+    raw_out: &str,
+    parsed: Vec<crate::model::NetworkInterface>,
+) -> Vec<crate::model::NetworkInterface> {
+    if cfg!(target_os = "windows") {
+        match capture_powershell_output(
+            app,
+            CommandSourceId::InterfaceStats,
+            POWERSHELL_INTERFACE_STATS_COMMAND,
+        ) {
+            Ok(output) => return merge_powershell_interface_stats(&output, parsed),
+            Err(error) => {
+                app.push_event(NetworkEvent::new(
+                    NetworkEventKind::SystemError,
+                    EventSeverity::Warning,
+                    format!(
+                        "interface stats: Windows PowerShell statistics unavailable; RX/TX graph may be empty. Cause: {error}"
+                    ),
+                ));
+                return parsed;
+            }
+        }
+    }
+
+    let stats_out = run_netstat_ib().unwrap_or_else(|_| raw_out.to_string());
+    merge_stats(&stats_out, parsed)
 }
 
 fn collect_routes(route_output: Option<&str>) -> Vec<RouteEntry> {

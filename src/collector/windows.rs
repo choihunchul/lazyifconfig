@@ -1,6 +1,6 @@
 use crate::model::{
-    ActiveConnection, InterfaceAddress, InterfaceStatus, InterfaceType, ListeningPort,
-    NetworkInterface, NetworkKind, RouteEntry, RouteFamily,
+    ActiveConnection, InterfaceAddress, InterfaceStats, InterfaceStatus, InterfaceType,
+    ListeningPort, NetworkInterface, NetworkKind, RouteEntry, RouteFamily,
 };
 use serde_json::Value;
 
@@ -118,6 +118,49 @@ pub fn parse_powershell_connections(input: &str) -> Vec<ActiveConnection> {
             })
         })
         .collect()
+}
+
+pub fn merge_powershell_interface_stats(
+    input: &str,
+    mut interfaces: Vec<NetworkInterface>,
+) -> Vec<NetworkInterface> {
+    let stats = parse_powershell_interface_stats(input);
+    for interface in &mut interfaces {
+        if let Some(stat) = stats.iter().find(|stat| stat.name == interface.name) {
+            interface.stats = Some(stat.stats.clone());
+        }
+    }
+    interfaces
+}
+
+fn parse_powershell_interface_stats(input: &str) -> Vec<WindowsInterfaceStats> {
+    json_items(input)
+        .into_iter()
+        .filter_map(|item| {
+            let item = &item;
+            let name = string_field(item, "Name")
+                .or_else(|| string_field(item, "InterfaceAlias"))
+                .or_else(|| string_field(item, "InterfaceDescription"))?;
+            Some(WindowsInterfaceStats {
+                name,
+                stats: InterfaceStats {
+                    rx_bytes: u64_field(item, "ReceivedBytes").unwrap_or(0),
+                    tx_bytes: u64_field(item, "SentBytes").unwrap_or(0),
+                    rx_packets: u64_field(item, "ReceivedUnicastPackets")
+                        .or_else(|| u64_field(item, "ReceivedPackets"))
+                        .unwrap_or(0),
+                    tx_packets: u64_field(item, "SentUnicastPackets")
+                        .or_else(|| u64_field(item, "SentPackets"))
+                        .unwrap_or(0),
+                },
+            })
+        })
+        .collect()
+}
+
+struct WindowsInterfaceStats {
+    name: String,
+    stats: InterfaceStats,
 }
 
 fn parse_interface_addresses(value: Option<&Value>) -> Vec<InterfaceAddress> {
@@ -320,5 +363,43 @@ mod tests {
         assert_eq!(ports[0].local_port, "5050");
         assert_eq!(ports[0].pid, "2460");
         assert_eq!(connections[0].state.as_deref(), Some("Established"));
+    }
+
+    #[test]
+    fn merges_powershell_interface_statistics() {
+        let interfaces = vec![NetworkInterface {
+            interface_type: InterfaceType::WifiOrEthernet,
+            network_kind: NetworkKind::Lan,
+            status: InterfaceStatus::Up,
+            mtu: Some(1500),
+            name: "Wi-Fi".to_string(),
+            ipv4: Vec::new(),
+            ipv6: Vec::new(),
+            mac_address: None,
+            stats: None,
+        }];
+        let stats_json = r#"
+[
+  {
+    "Name": "Wi-Fi",
+    "ReceivedBytes": 9178588284,
+    "SentBytes": 4905232533,
+    "ReceivedUnicastPackets": 11885040,
+    "SentUnicastPackets": 9544740
+  }
+]
+"#;
+
+        let merged = merge_powershell_interface_stats(stats_json, interfaces);
+
+        assert_eq!(
+            merged[0].stats.as_ref(),
+            Some(&InterfaceStats {
+                rx_bytes: 9178588284,
+                tx_bytes: 4905232533,
+                rx_packets: 11885040,
+                tx_packets: 9544740,
+            })
+        );
     }
 }

@@ -380,6 +380,7 @@ pub enum CommandSourceId {
     RoutePath,
     NetstatConnections,
     LsofPorts,
+    InterfaceStats,
     PublicIp,
     GitHubRelease,
     Arp,
@@ -426,6 +427,15 @@ impl CommandSourceId {
                     "netstat -ano -p tcp"
                 } else {
                     "lsof -iTCP -sTCP:LISTEN -P -n"
+                }
+            }
+            CommandSourceId::InterfaceStats => {
+                if cfg!(target_os = "windows") {
+                    "Get-NetAdapterStatistics"
+                } else if cfg!(target_os = "macos") {
+                    "netstat -ib"
+                } else {
+                    "ip -details -statistics address show"
                 }
             }
             CommandSourceId::PublicIp => "curl -s -m 5 https://ipinfo.io/json",

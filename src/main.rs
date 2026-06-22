@@ -606,7 +606,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             app.help_visible = false;
                             let sources = match app.view_mode {
                                 ViewMode::Interface | ViewMode::Network => {
-                                    vec![CommandSourceId::Ifconfig]
+                                    let mut sources = vec![CommandSourceId::Ifconfig];
+                                    if app
+                                        .command_outputs
+                                        .contains_key(&CommandSourceId::InterfaceStats)
+                                    {
+                                        sources.push(CommandSourceId::InterfaceStats);
+                                    }
+                                    sources
                                 }
                                 ViewMode::Connections => vec![CommandSourceId::NetstatConnections],
                                 ViewMode::Ports => vec![CommandSourceId::LsofPorts],
