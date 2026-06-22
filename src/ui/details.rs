@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::ProcessDetails;
 
 pub(super) fn prefix_len_to_ipv4_mask(prefix_len: u8) -> String {
     let mask = if prefix_len == 0 {
@@ -127,15 +128,6 @@ pub(super) fn route_inspector_section_tabs(app: &App) -> Line<'static> {
         &[("Summary", 1), ("Path", 2), ("VPN", 3), ("Diagnostics", 4)],
         active_index,
     )
-}
-
-pub(super) fn port_details_section_tabs(app: &App) -> Line<'static> {
-    let active_index = match app.port_details_section {
-        PortDetailsSection::Summary => 0,
-        PortDetailsSection::Process => 1,
-    };
-
-    detail_section_tabs(&[("Summary", 1), ("Process", 2)], active_index)
 }
 
 pub(super) fn connection_details_section_tabs(app: &App) -> Line<'static> {
@@ -292,6 +284,7 @@ pub(super) fn connection_whois_lines(app: &App, foreign_ip: &str) -> Vec<Line<'s
     lines
 }
 
+#[allow(dead_code)]
 pub(super) fn port_summary_lines(
     proto: &str,
     port: &str,
@@ -327,8 +320,20 @@ pub(super) fn port_summary_lines(
     ]
 }
 
-pub(super) fn port_process_lines(command: &str, pid: &str, user: &str) -> Vec<Line<'static>> {
-    vec![
+pub(super) struct PortProcessLinesInput<'a> {
+    pub command: &'a str,
+    pub pid: &'a str,
+    pub user: &'a str,
+    pub process: Option<&'a ProcessDetails>,
+    pub ports: Vec<(&'a str, &'a str)>,
+}
+
+pub(super) fn port_process_lines(input: PortProcessLinesInput<'_>) -> Vec<Line<'static>> {
+    let label_style = Style::default().add_modifier(Modifier::BOLD);
+    let value_style = Style::default().fg(Color::Green);
+    let port_style = Style::default().fg(Color::Yellow);
+
+    let mut lines = vec![
         Line::from(Span::styled(
             "=== Process ===",
             Style::default()
@@ -337,18 +342,125 @@ pub(super) fn port_process_lines(command: &str, pid: &str, user: &str) -> Vec<Li
         )),
         Line::from(""),
         Line::from(vec![
-            Span::styled("Command: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(command.to_string(), Style::default().fg(Color::Green)),
+            Span::styled(format!("{:<13}", "Command"), label_style),
+            Span::styled(input.command.to_string(), value_style),
         ]),
         Line::from(vec![
-            Span::styled("PID:     ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(pid.to_string()),
+            Span::styled(format!("{:<13}", "PID"), label_style),
+            Span::raw(input.pid.to_string()),
         ]),
         Line::from(vec![
-            Span::styled("User:    ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(user.to_string()),
+            Span::styled(format!("{:<13}", "User"), label_style),
+            Span::raw(input.user.to_string()),
         ]),
-    ]
+    ];
+
+    if let Some(process) = input.process {
+        if process.executable.is_some()
+            || process.working_dir.is_some()
+            || process.started.is_some()
+        {
+            lines.push(Line::from(""));
+            if let Some(executable) = &process.executable {
+                lines.push(process_value_line("Executable", executable, label_style));
+            }
+            if let Some(working_dir) = &process.working_dir {
+                lines.push(process_value_line("Working Dir", working_dir, label_style));
+            }
+            if let Some(started) = &process.started {
+                lines.push(process_value_line("Started", started, label_style));
+            }
+        }
+
+        if process.cpu_usage_tenths.is_some()
+            || process.memory_rss_bytes.is_some()
+            || process.threads.is_some()
+        {
+            lines.push(Line::from(""));
+            if let Some(cpu_usage_tenths) = process.cpu_usage_tenths {
+                lines.push(process_value_line(
+                    "CPU",
+                    &format!("{:.1}%", cpu_usage_tenths as f64 / 10.0),
+                    label_style,
+                ));
+            }
+            if let Some(memory_rss_bytes) = process.memory_rss_bytes {
+                lines.push(process_value_line(
+                    "Memory",
+                    &format_memory(memory_rss_bytes),
+                    label_style,
+                ));
+            }
+            if let Some(threads) = process.threads {
+                lines.push(process_value_line(
+                    "Threads",
+                    &threads.to_string(),
+                    label_style,
+                ));
+            }
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("Ports", label_style)));
+    for (index, (port, _proto)) in input.ports.iter().enumerate() {
+        let branch = if index + 1 == input.ports.len() {
+            " └─ "
+        } else {
+            " ├─ "
+        };
+        lines.push(Line::from(vec![
+            Span::raw(branch),
+            Span::styled((*port).to_string(), port_style),
+            Span::raw(" LISTEN"),
+        ]));
+    }
+
+    if let Some(java) = input.process.and_then(|process| process.java.as_ref()) {
+        if java.xmx.is_some() || java.xms.is_some() || java.jar.is_some() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Java", label_style)));
+            if let Some(xmx) = &java.xmx {
+                lines.push(tree_value_line(false, "Xmx", xmx, label_style));
+            }
+            if let Some(xms) = &java.xms {
+                lines.push(tree_value_line(false, "Xms", xms, label_style));
+            }
+            if let Some(jar) = &java.jar {
+                lines.push(tree_value_line(true, "Jar", jar, label_style));
+            }
+        }
+    }
+
+    lines
+}
+
+fn process_value_line(label: &str, value: &str, label_style: Style) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{label:<13}"), label_style),
+        Span::raw(value.to_string()),
+    ])
+}
+
+fn tree_value_line(is_last: bool, label: &str, value: &str, label_style: Style) -> Line<'static> {
+    let branch = if is_last { " └─ " } else { " ├─ " };
+    Line::from(vec![
+        Span::raw(branch),
+        Span::styled(format!("{label:<10}"), label_style),
+        Span::raw(value.to_string()),
+    ])
+}
+
+fn format_memory(bytes: u64) -> String {
+    if bytes >= 1_000_000_000 {
+        format!("{:.1} GB", bytes as f64 / 1_000_000_000.0)
+    } else if bytes >= 1_000_000 {
+        format!("{:.1} MB", bytes as f64 / 1_000_000.0)
+    } else if bytes >= 1_000 {
+        format!("{:.1} KB", bytes as f64 / 1_000.0)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn route_summary_lines(app: &App) -> Vec<Line<'static>> {

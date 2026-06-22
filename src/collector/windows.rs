@@ -98,6 +98,7 @@ pub fn parse_powershell_listening_ports(input: &str) -> Vec<ListeningPort> {
                 pid: pid.clone(),
                 command: format!("pid:{pid}"),
                 user: "-".to_string(),
+                process: None,
             })
         })
         .collect()

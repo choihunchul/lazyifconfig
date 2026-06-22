@@ -1,8 +1,8 @@
 use std::{fs, process::Command, sync::OnceLock};
 
 use crate::app::{
-    App, ConnectionDetailsSection, ConnectionSortColumn, NavigationItem, PortDetailsSection,
-    PortSortColumn, SortDirection, ViewMode,
+    App, ConnectionDetailsSection, ConnectionSortColumn, NavigationItem, PortSortColumn,
+    SortDirection, ViewMode,
 };
 use crate::model::{
     InterfaceStatus, NetworkKind, ProcessMetrics, RouteDiagnosticSeverity, RouteFamily,
@@ -29,9 +29,9 @@ mod tools;
 
 use details::{
     calculate_ipv4_subnet_u32, calculate_ipv6_subnet_arr, connection_details_section_tabs,
-    connection_summary_lines, connection_whois_lines, format_bps, port_details_section_tabs,
-    port_process_lines, port_summary_lines, prefix_len_to_ipv4_mask,
-    render_route_inspector_details, resolve_connection_interface, route_family_label,
+    connection_summary_lines, connection_whois_lines, format_bps, port_process_lines,
+    prefix_len_to_ipv4_mask, render_route_inspector_details, resolve_connection_interface,
+    route_family_label, PortProcessLinesInput,
 };
 use overlays::{
     build_command_panel, command_panel_height, draw_help, draw_port_action_confirmation,
@@ -881,31 +881,39 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     frame.render_widget(details_p, chunks[1]);
                 }
                 NavigationItem::ListeningPort {
-                    proto,
-                    port,
                     command,
                     pid,
                     user,
+                    index,
                     ..
                 } => {
-                    let chunks = Layout::default()
-                        .direction(Direction::Vertical)
-                        .constraints([Constraint::Length(1), Constraint::Min(0)])
-                        .split(details_inner);
-
-                    let tab_line = Paragraph::new(port_details_section_tabs(app))
-                        .style(Style::default().fg(Color::White).bg(Color::Rgb(24, 24, 24)));
-                    frame.render_widget(tab_line, chunks[0]);
-
-                    let lines = match app.port_details_section {
-                        PortDetailsSection::Summary => port_summary_lines(proto, port, pid, user),
-                        PortDetailsSection::Process => port_process_lines(command, pid, user),
-                    };
-
-                    let details_p = Paragraph::new(lines)
-                        .wrap(Wrap { trim: true })
-                        .scroll((app.details_scroll, 0));
-                    frame.render_widget(details_p, chunks[1]);
+                    let process = app
+                        .current_snapshot
+                        .as_ref()
+                        .and_then(|snapshot| snapshot.listening_ports.get(*index))
+                        .and_then(|port| port.process.as_ref());
+                    let ports = app
+                        .current_snapshot
+                        .as_ref()
+                        .map(|snapshot| {
+                            snapshot
+                                .listening_ports
+                                .iter()
+                                .filter(|port| port.pid == *pid)
+                                .map(|port| (port.local_port.as_str(), port.proto.as_str()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let details_p = Paragraph::new(port_process_lines(PortProcessLinesInput {
+                        command,
+                        pid,
+                        user,
+                        process,
+                        ports,
+                    }))
+                    .wrap(Wrap { trim: true })
+                    .scroll((app.details_scroll, 0));
+                    frame.render_widget(details_p, details_inner);
                 }
                 NavigationItem::Event {
                     index,
@@ -1121,8 +1129,9 @@ mod tests {
     use super::*;
     use crate::app::App;
     use crate::model::{
-        NetworkSnapshot, ProcessMetrics, RouteDiagnostic, RouteDiagnosticSeverity, RouteEntry,
-        RouteFamily, RouteInspectorSection, RoutePathResult,
+        JavaDetails, ListeningPort, NetworkSnapshot, ProcessDetails, ProcessMetrics,
+        RouteDiagnostic, RouteDiagnosticSeverity, RouteEntry, RouteFamily, RouteInspectorSection,
+        RoutePathResult,
     };
     use crate::ui::details::{route_diagnostic_lines, route_inspector_section_tabs};
     use ratatui::{backend::TestBackend, Terminal};
@@ -1173,6 +1182,82 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &app)).unwrap();
+    }
+
+    #[test]
+    fn ports_details_render_single_process_panel_without_tabs() {
+        let mut app = App::default();
+        app.view_mode = ViewMode::Ports;
+        app.replace_snapshot(NetworkSnapshot {
+            interfaces: vec![],
+            connections: vec![],
+            listening_ports: vec![
+                ListeningPort {
+                    proto: "tcp".to_string(),
+                    local_ip: "0.0.0.0".to_string(),
+                    local_port: "8080".to_string(),
+                    pid: "90759".to_string(),
+                    command: "java".to_string(),
+                    user: "hunchulchoi".to_string(),
+                    process: Some(ProcessDetails {
+                        executable: Some("/usr/lib/jvm/java-21/bin/java".to_string()),
+                        working_dir: Some("/opt/tibero/monitor".to_string()),
+                        started: Some("2026-06-22 09:12".to_string()),
+                        cpu_usage_tenths: Some(124),
+                        memory_rss_bytes: Some(1_800_000_000),
+                        threads: Some(84),
+                        java: Some(JavaDetails {
+                            xmx: Some("2G".to_string()),
+                            xms: Some("512M".to_string()),
+                            jar: Some("monitor.jar".to_string()),
+                        }),
+                    }),
+                },
+                ListeningPort {
+                    proto: "tcp".to_string(),
+                    local_ip: "0.0.0.0".to_string(),
+                    local_port: "9999".to_string(),
+                    pid: "90759".to_string(),
+                    command: "java".to_string(),
+                    user: "hunchulchoi".to_string(),
+                    process: None,
+                },
+            ],
+            routes: vec![],
+            captured_at_secs: 0,
+        });
+
+        let backend = TestBackend::new(120, 45);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("=== Process ==="));
+        assert!(rendered.contains("Command      java"));
+        assert!(rendered.contains("PID          90759"));
+        assert!(rendered.contains("User         hunchulchoi"));
+        assert!(rendered.contains("Executable   /usr/lib/jvm/java-21/bin/java"));
+        assert!(rendered.contains("Working Dir  /opt/tibero/monitor"));
+        assert!(rendered.contains("Started      2026-06-22 09:12"));
+        assert!(rendered.contains("CPU          12.4%"));
+        assert!(rendered.contains("Memory       1.8 GB"));
+        assert!(rendered.contains("Threads      84"));
+        assert!(rendered.contains("Ports"));
+        assert!(rendered.contains("8080 LISTEN"));
+        assert!(rendered.contains("9999 LISTEN"));
+        assert!(rendered.contains("Java"));
+        assert!(rendered.contains("Xmx       2G"));
+        assert!(rendered.contains("Xms       512M"));
+        assert!(rendered.contains("Jar       monitor.jar"));
+        assert!(!rendered.contains("1:Summary"));
+        assert!(!rendered.contains("2:Process"));
+        assert!(!rendered.contains("=== Port Summary ==="));
     }
 
     fn route_test_app(section: RouteInspectorSection) -> App {

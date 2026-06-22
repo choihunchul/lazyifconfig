@@ -45,6 +45,7 @@ pub fn parse_listening_ports(input: &str) -> Vec<ListeningPort> {
             pid,
             command,
             user,
+            process: None,
         });
     }
 
@@ -142,6 +143,7 @@ fn parse_windows_netstat_ports(input: &str) -> Vec<ListeningPort> {
             pid: pid.clone(),
             command: format!("pid:{pid}"),
             user: "-".to_string(),
+            process: None,
         });
     }
 
@@ -167,6 +169,7 @@ fn parse_ss_listening_ports(input: &str) -> Vec<ListeningPort> {
             pid,
             command,
             user: "-".to_string(),
+            process: None,
         });
     }
 
@@ -380,6 +383,7 @@ Active Connections
                 pid: "2460".to_string(),
                 command: "pid:2460".to_string(),
                 user: "-".to_string(),
+                process: None,
             },
             ListeningPort {
                 proto: "tcp".to_string(),
@@ -388,6 +392,7 @@ Active Connections
                 pid: "16052".to_string(),
                 command: "pid:16052".to_string(),
                 user: "-".to_string(),
+                process: None,
             },
         ];
         let tasklist = "\

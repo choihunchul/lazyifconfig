@@ -682,8 +682,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Tab => {
                             if app.view_mode == ViewMode::Routes {
                                 app.select_next_route_section();
-                            } else if app.view_mode == ViewMode::Ports {
-                                app.select_next_port_details_section();
                             } else if app.view_mode == ViewMode::Connections {
                                 app.select_next_connection_details_section();
                             }
@@ -691,8 +689,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::BackTab => {
                             if app.view_mode == ViewMode::Routes {
                                 app.select_previous_route_section();
-                            } else if app.view_mode == ViewMode::Ports {
-                                app.select_previous_port_details_section();
                             } else if app.view_mode == ViewMode::Connections {
                                 app.select_previous_connection_details_section();
                             }

@@ -144,7 +144,7 @@ cargo run --release -- tools traceroute 8.8.8.8
 - `g`: Route Inspector
 - `/` and `[` : scroll in list-heavy views
 - In Route Inspector: `Enter` starts destination path lookup, `Tab` switches inspector sections, `Home`/`End` or `1`-`4` jumps between sections, `/` filters routes, `o` opens raw route output
-- In Ports and Connections: `Tab` switches the detail tabs
+- In Connections: `Tab` switches the detail tabs
 - In Tools: `Tab` moves between input fields and the first field is focused when the modal opens
 
 Some views expose additional actions in the footer, including filtering ports, copying values, WHOIS lookup, and raw output inspection.

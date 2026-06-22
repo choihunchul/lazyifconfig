@@ -4,7 +4,7 @@ use crate::collector::interface::{merge_gateways, parse_interfaces};
 use crate::collector::ports::{enrich_listening_ports_with_processes, parse_listening_ports};
 use crate::collector::routes::parse_routes;
 use crate::collector::stats::merge_stats;
-use crate::collector::system::collect_process_metrics;
+use crate::collector::system::{collect_process_details, collect_process_metrics};
 use crate::collector::windows::{
     merge_powershell_interface_stats, parse_powershell_connections, parse_powershell_interfaces,
     parse_powershell_listening_ports, parse_powershell_routes,
@@ -20,6 +20,7 @@ use crate::model::{
 use crate::runtime::update_flow::{
     drain_update_messages, maybe_start_auto_update_check, maybe_start_auto_update_install,
 };
+use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn tick_update(app: &mut App) -> Result<(), String> {
@@ -71,6 +72,7 @@ pub fn tick_update(app: &mut App) -> Result<(), String> {
 
     let mut listening_ports = collect_listening_ports(app);
     enrich_windows_listening_ports(&mut listening_ports);
+    enrich_listening_port_process_details(&mut listening_ports);
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -538,6 +540,20 @@ fn merge_additional_route_output(
         routes.extend(parse_routes(output));
     }
     routes
+}
+
+fn enrich_listening_port_process_details(ports: &mut [crate::model::ListeningPort]) {
+    let mut details_by_pid = HashMap::new();
+    for port in ports.iter_mut() {
+        if port.process.is_some() {
+            continue;
+        }
+
+        let details = details_by_pid
+            .entry(port.pid.clone())
+            .or_insert_with(|| collect_process_details(&port.pid));
+        port.process = details.clone();
+    }
 }
 
 #[cfg(test)]

@@ -146,7 +146,7 @@ cargo run --release -- tools traceroute 8.8.8.8
 - `g`: Route Inspector
 - `/` 및 `[`: list-heavy view에서 스크롤
 - Route Inspector: `Enter`로 목적지 경로 조회 시작, `Tab`으로 inspector section 전환, `Home`/`End` 또는 `1`-`4`로 section 이동, `/`로 route 필터링, `o`로 raw route output 열기
-- Ports와 Connections: `Tab`으로 detail tab 전환
+- Connections: `Tab`으로 detail tab 전환
 - Tools: `Tab`으로 input field 이동, modal이 열릴 때 첫 field가 focus됩니다.
 
 일부 화면 footer에는 포트 필터링, 값 복사, WHOIS 조회, raw output inspection 같은 추가 액션이 표시됩니다.

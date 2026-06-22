@@ -716,6 +716,7 @@ fn listening_port(
         pid: pid.to_string(),
         command: command.to_string(),
         user: user.to_string(),
+        process: None,
     }
 }
 

@@ -95,6 +95,25 @@ pub struct ListeningPort {
     pub pid: String,
     pub command: String,
     pub user: String,
+    pub process: Option<ProcessDetails>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProcessDetails {
+    pub executable: Option<String>,
+    pub working_dir: Option<String>,
+    pub started: Option<String>,
+    pub cpu_usage_tenths: Option<u16>,
+    pub memory_rss_bytes: Option<u64>,
+    pub threads: Option<u32>,
+    pub java: Option<JavaDetails>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct JavaDetails {
+    pub xmx: Option<String>,
+    pub xms: Option<String>,
+    pub jar: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -16,12 +16,6 @@ type PendingToolResults =
     std::sync::Arc<std::sync::Mutex<Vec<(ToolId, Result<ToolResult, String>)>>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PortDetailsSection {
-    Summary,
-    Process,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectionDetailsSection {
     Summary,
     Whois,
@@ -351,7 +345,6 @@ pub struct App {
     pub tools: ToolsState,
     pub pending_tool_results: PendingToolResults,
     pub route_inspector: RouteInspectorState,
-    pub port_details_section: PortDetailsSection,
     pub connection_details_section: ConnectionDetailsSection,
     pub pending_port_action: Option<PortProcessConfirmation>,
     pub quit_confirmation_active: bool,
@@ -452,7 +445,6 @@ impl Default for App {
             tools: ToolsState::default(),
             pending_tool_results: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             route_inspector: RouteInspectorState::default(),
-            port_details_section: PortDetailsSection::Summary,
             connection_details_section: ConnectionDetailsSection::Summary,
             pending_port_action: None,
             quit_confirmation_active: false,
@@ -579,7 +571,6 @@ impl App {
             ViewMode::Routes => {
                 self.route_inspector.active_section = RouteInspectorSection::Summary
             }
-            ViewMode::Ports => self.port_details_section = PortDetailsSection::Summary,
             ViewMode::Connections => {
                 self.connection_details_section = ConnectionDetailsSection::Summary
             }
@@ -869,31 +860,6 @@ impl App {
             RouteInspectorSection::PathViewer => RouteInspectorSection::Summary,
             RouteInspectorSection::VpnRoutes => RouteInspectorSection::PathViewer,
             RouteInspectorSection::Diagnostics => RouteInspectorSection::VpnRoutes,
-        };
-        self.details_scroll = 0;
-    }
-
-    pub fn select_next_port_details_section(&mut self) {
-        self.port_details_section = match self.port_details_section {
-            PortDetailsSection::Summary => PortDetailsSection::Process,
-            PortDetailsSection::Process => PortDetailsSection::Summary,
-        };
-        self.details_scroll = 0;
-    }
-
-    pub fn select_previous_port_details_section(&mut self) {
-        self.port_details_section = match self.port_details_section {
-            PortDetailsSection::Summary => PortDetailsSection::Process,
-            PortDetailsSection::Process => PortDetailsSection::Summary,
-        };
-        self.details_scroll = 0;
-    }
-
-    pub fn select_port_details_section_by_index(&mut self, index: usize) {
-        self.port_details_section = if index == 0 {
-            PortDetailsSection::Summary
-        } else {
-            PortDetailsSection::Process
         };
         self.details_scroll = 0;
     }
