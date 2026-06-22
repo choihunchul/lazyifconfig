@@ -80,6 +80,7 @@ jobs:
 
           if [[ "${{ matrix.archive }}" == "zip" ]]; then
             7z a "${package}.zip" "${package}"
+            tar -czf "${package}.tar.gz" "${package}"
           else
             tar -czf "${package}.tar.gz" "${package}"
           fi

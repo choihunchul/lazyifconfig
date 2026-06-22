@@ -144,24 +144,9 @@ pub fn install_update(update: &AvailableUpdate, current_exe: &Path) -> Result<()
         return Err(format!("curl download failed with status {curl_status}"));
     }
 
-    if update.asset_name.ends_with(".tar.gz") {
-        let tar_status = Command::new("tar")
-            .args(["-xzf"])
-            .arg(&archive_path)
-            .args(["-C"])
-            .arg(&extract_root)
-            .status()
-            .map_err(|e| format!("failed to start tar: {e}"))?;
-        if !tar_status.success() {
-            let _ = fs::remove_dir_all(&temp_root);
-            return Err(format!("tar extraction failed with status {tar_status}"));
-        }
-    } else {
+    if let Err(err) = extract_update_archive(&archive_path, &extract_root, &update.asset_name) {
         let _ = fs::remove_dir_all(&temp_root);
-        return Err(format!(
-            "unsupported archive format for asset {}",
-            update.asset_name
-        ));
+        return Err(err);
     }
 
     let binary_name = if cfg!(windows) {
@@ -193,6 +178,64 @@ pub fn install_update(update: &AvailableUpdate, current_exe: &Path) -> Result<()
     fs::rename(&staged_binary, current_exe).map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(&temp_root);
     Ok(())
+}
+
+fn extract_update_archive(
+    archive_path: &Path,
+    extract_root: &Path,
+    asset_name: &str,
+) -> Result<(), String> {
+    if asset_name.ends_with(".tar.gz") {
+        let tar_status = Command::new("tar")
+            .args(["-xzf"])
+            .arg(archive_path)
+            .args(["-C"])
+            .arg(extract_root)
+            .status()
+            .map_err(|e| format!("failed to start tar: {e}"))?;
+        if !tar_status.success() {
+            return Err(format!("tar extraction failed with status {tar_status}"));
+        }
+        return Ok(());
+    }
+
+    if asset_name.ends_with(".zip") {
+        return extract_zip_archive(archive_path, extract_root);
+    }
+
+    Err(format!("unsupported archive format for asset {asset_name}"))
+}
+
+#[cfg(windows)]
+fn extract_zip_archive(archive_path: &Path, extract_root: &Path) -> Result<(), String> {
+    let script = "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force";
+    let status = Command::new("powershell.exe")
+        .args(["-NoProfile", "-Command", script])
+        .arg(archive_path)
+        .arg(extract_root)
+        .status()
+        .map_err(|e| format!("failed to start PowerShell Expand-Archive: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("zip extraction failed with status {status}"))
+    }
+}
+
+#[cfg(not(windows))]
+fn extract_zip_archive(archive_path: &Path, extract_root: &Path) -> Result<(), String> {
+    let status = Command::new("unzip")
+        .arg("-q")
+        .arg(archive_path)
+        .arg("-d")
+        .arg(extract_root)
+        .status()
+        .map_err(|e| format!("failed to start unzip: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("zip extraction failed with status {status}"))
+    }
 }
 
 fn repository_slug() -> Result<String, String> {
@@ -439,5 +482,47 @@ mod tests {
             url,
             "https://api.github.com/repos/choihunchul/lazyifconfig/releases/latest"
         );
+    }
+
+    #[test]
+    fn select_release_asset_prefers_tarball_over_zip() {
+        let release = ReleaseInfo {
+            tag_name: "v9.9.9".to_string(),
+            html_url: "https://example.com".to_string(),
+            body: String::new(),
+            release_date: None,
+            assets: vec![
+                ReleaseAsset {
+                    name: "lazyifconfig-v9.9.9-x86_64-pc-windows-msvc.zip".to_string(),
+                    download_url: "https://example.com/windows.zip".to_string(),
+                },
+                ReleaseAsset {
+                    name: "lazyifconfig-v9.9.9-x86_64-pc-windows-msvc.tar.gz".to_string(),
+                    download_url: "https://example.com/windows.tar.gz".to_string(),
+                },
+            ],
+        };
+
+        let asset = select_release_asset(&release, "x86_64-pc-windows-msvc").unwrap();
+
+        assert!(asset.name.ends_with(".tar.gz"));
+    }
+
+    #[test]
+    fn select_release_asset_accepts_zip_when_tarball_missing() {
+        let release = ReleaseInfo {
+            tag_name: "v9.9.9".to_string(),
+            html_url: "https://example.com".to_string(),
+            body: String::new(),
+            release_date: None,
+            assets: vec![ReleaseAsset {
+                name: "lazyifconfig-v9.9.9-x86_64-pc-windows-msvc.zip".to_string(),
+                download_url: "https://example.com/windows.zip".to_string(),
+            }],
+        };
+
+        let asset = select_release_asset(&release, "x86_64-pc-windows-msvc").unwrap();
+
+        assert!(asset.name.ends_with(".zip"));
     }
 }
