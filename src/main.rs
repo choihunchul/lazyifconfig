@@ -5,6 +5,7 @@ use crossterm::{
 };
 use lazyifconfig::app::{App, NavigationItem, ViewMode};
 use lazyifconfig::command::run_kill;
+use lazyifconfig::input::InputBurstGuard;
 use lazyifconfig::model::{
     CommandSourceId, EventSeverity, NetworkEvent, NetworkEventKind, RouteInspectorSection,
 };
@@ -101,6 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut last_tick = std::time::Instant::now();
     let tick_rate = Duration::from_secs(2);
+    let mut input_burst_guard = InputBurstGuard::default();
 
     loop {
         app.drain_pending_tool_results();
@@ -113,13 +115,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if event::poll(timeout)? {
             match event::read()? {
                 Event::Paste(text) => {
-                    if app.view_mode == ViewMode::Tools && app.tools.input_modal_open {
+                    if text.chars().count() <= InputBurstGuard::MAX_KEYS_PER_WINDOW
+                        && app.view_mode == ViewMode::Tools
+                        && app.tools.input_modal_open
+                    {
                         app.tools.push_input_text(&text);
                     }
                     continue;
                 }
                 Event::Key(key) => {
                     if !lazyifconfig::input::should_handle_key_event(key) {
+                        continue;
+                    }
+                    if !input_burst_guard.should_handle_key(key, std::time::Instant::now()) {
                         continue;
                     }
 

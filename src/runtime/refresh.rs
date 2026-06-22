@@ -5,6 +5,10 @@ use crate::collector::ports::{enrich_listening_ports_with_processes, parse_liste
 use crate::collector::routes::parse_routes;
 use crate::collector::stats::merge_stats;
 use crate::collector::system::collect_process_metrics;
+use crate::collector::windows::{
+    parse_powershell_connections, parse_powershell_interfaces, parse_powershell_listening_ports,
+    parse_powershell_routes,
+};
 use crate::command::{
     default_route_command_spec, interface_command_spec, listening_ports_command_spec,
     route_table_command_spec, run_command_capture, run_netstat_ib, CommandResult, OwnedCommandSpec,
@@ -32,35 +36,15 @@ pub fn tick_update(app: &mut App) -> Result<(), String> {
 
     app.process_metrics = Some(collect_process_metrics());
 
-    let interface_command = interface_command_spec();
-    let raw_out_res = capture_command_output(
-        app,
-        CommandSourceId::Ifconfig,
-        interface_command.display,
-        interface_command.program,
-        interface_command.args,
-    );
-    let raw_out = raw_out_res?;
-    let mut parsed = parse_interfaces(&raw_out);
+    let (raw_out, mut parsed) = collect_interfaces(app)?;
 
-    let route_table_command = route_table_command_spec();
-    let netstat_out_res = capture_command_output(
-        app,
-        CommandSourceId::NetstatRoutes,
-        route_table_command.display,
-        route_table_command.program,
-        route_table_command.args,
-    );
+    let netstat_out_res = collect_route_table_output(app);
     let netstat_out = netstat_out_res.ok();
     if let Some(out) = &netstat_out {
         merge_gateways(&mut parsed, out);
     }
 
-    let mut routes = if let Some(out) = &netstat_out {
-        parse_routes(out)
-    } else {
-        Vec::new()
-    };
+    let mut routes = collect_routes(netstat_out.as_deref());
 
     let default_route_command = default_route_command_spec();
     let _ = capture_command_output(
@@ -84,32 +68,9 @@ pub fn tick_update(app: &mut App) -> Result<(), String> {
     let stats_out = run_netstat_ib().unwrap_or_else(|_| raw_out.clone());
     let merged = merge_stats(&stats_out, parsed);
 
-    let connections_res = capture_command_output(
-        app,
-        CommandSourceId::NetstatConnections,
-        "netstat -an",
-        "netstat",
-        &["-an"],
-    );
-    let connections = if let Ok(netstat_an_out) = &connections_res {
-        parse_connections(netstat_an_out)
-    } else {
-        Vec::new()
-    };
+    let connections = collect_connections(app);
 
-    let listening_ports_command = listening_ports_command_spec();
-    let ports_res = capture_command_output(
-        app,
-        CommandSourceId::LsofPorts,
-        listening_ports_command.display,
-        listening_ports_command.program,
-        listening_ports_command.args,
-    );
-    let mut listening_ports = if let Ok(ports_out) = &ports_res {
-        parse_listening_ports(ports_out)
-    } else {
-        Vec::new()
-    };
+    let mut listening_ports = collect_listening_ports(app);
     enrich_windows_listening_ports(&mut listening_ports);
 
     let now = SystemTime::now()
@@ -235,6 +196,181 @@ pub fn tick_update(app: &mut App) -> Result<(), String> {
         captured_at_secs: now,
     });
     Ok(())
+}
+
+const POWERSHELL_INTERFACES_COMMAND: &str = "$ErrorActionPreference='Stop'; Get-NetIPConfiguration | ForEach-Object { $adapter = Get-NetAdapter -InterfaceIndex $_.InterfaceIndex -ErrorAction SilentlyContinue; [pscustomobject]@{ InterfaceAlias=$_.InterfaceAlias; InterfaceIndex=$_.InterfaceIndex; InterfaceDescription=$_.InterfaceDescription; NetAdapter=$adapter; IPv4Address=$_.IPv4Address; IPv6Address=$_.IPv6Address; IPv4DefaultGateway=$_.IPv4DefaultGateway; IPv6DefaultGateway=$_.IPv6DefaultGateway } } | ConvertTo-Json -Depth 6 -Compress";
+const POWERSHELL_ROUTES_COMMAND: &str = "$ErrorActionPreference='Stop'; Get-NetRoute | Select-Object DestinationPrefix,NextHop,InterfaceAlias,InterfaceIndex,RouteMetric,Protocol,AddressFamily | ConvertTo-Json -Depth 4 -Compress";
+const POWERSHELL_CONNECTIONS_COMMAND: &str = "$ErrorActionPreference='Stop'; Get-NetTCPConnection | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort,State | ConvertTo-Json -Depth 4 -Compress";
+const POWERSHELL_PORTS_COMMAND: &str = "$ErrorActionPreference='Stop'; Get-NetTCPConnection -State Listen | Select-Object LocalAddress,LocalPort,OwningProcess | ConvertTo-Json -Depth 4 -Compress";
+
+fn collect_interfaces(
+    app: &mut App,
+) -> Result<(String, Vec<crate::model::NetworkInterface>), String> {
+    if cfg!(target_os = "windows") {
+        match capture_powershell_output(
+            app,
+            CommandSourceId::Ifconfig,
+            POWERSHELL_INTERFACES_COMMAND,
+        )
+        .and_then(|output| {
+            let parsed = parse_powershell_interfaces(&output);
+            if parsed.is_empty() {
+                Err("PowerShell returned no interface data".to_string())
+            } else {
+                Ok((output, parsed))
+            }
+        }) {
+            Ok(result) => return Ok(result),
+            Err(error) => push_windows_fallback_event(app, "interfaces", "ipconfig /all", &error),
+        }
+    }
+
+    let interface_command = interface_command_spec();
+    let raw_out = capture_command_output(
+        app,
+        CommandSourceId::Ifconfig,
+        interface_command.display,
+        interface_command.program,
+        interface_command.args,
+    )?;
+    let parsed = parse_interfaces(&raw_out);
+    Ok((raw_out, parsed))
+}
+
+fn collect_route_table_output(app: &mut App) -> Result<String, String> {
+    if cfg!(target_os = "windows") {
+        match capture_powershell_output(
+            app,
+            CommandSourceId::NetstatRoutes,
+            POWERSHELL_ROUTES_COMMAND,
+        )
+        .and_then(|output| {
+            if parse_powershell_routes(&output).is_empty() {
+                Err("PowerShell returned no route data".to_string())
+            } else {
+                Ok(output)
+            }
+        }) {
+            Ok(output) => return Ok(output),
+            Err(error) => push_windows_fallback_event(app, "routes", "route PRINT", &error),
+        }
+    }
+
+    let route_table_command = route_table_command_spec();
+    capture_command_output(
+        app,
+        CommandSourceId::NetstatRoutes,
+        route_table_command.display,
+        route_table_command.program,
+        route_table_command.args,
+    )
+}
+
+fn collect_routes(route_output: Option<&str>) -> Vec<RouteEntry> {
+    if cfg!(target_os = "windows") {
+        if let Some(output) = route_output {
+            let routes = parse_powershell_routes(output);
+            if !routes.is_empty() {
+                return routes;
+            }
+        }
+    }
+
+    route_output.map(parse_routes).unwrap_or_default()
+}
+
+fn collect_connections(app: &mut App) -> Vec<crate::model::ActiveConnection> {
+    if cfg!(target_os = "windows") {
+        match capture_powershell_output(
+            app,
+            CommandSourceId::NetstatConnections,
+            POWERSHELL_CONNECTIONS_COMMAND,
+        )
+        .and_then(|output| {
+            let connections = parse_powershell_connections(&output);
+            if connections.is_empty() {
+                Err("PowerShell returned no connection data".to_string())
+            } else {
+                Ok(connections)
+            }
+        }) {
+            Ok(connections) => return connections,
+            Err(error) => push_windows_fallback_event(app, "connections", "netstat -an", &error),
+        }
+    }
+
+    let connections_res = capture_command_output(
+        app,
+        CommandSourceId::NetstatConnections,
+        "netstat -an",
+        "netstat",
+        &["-an"],
+    );
+    connections_res
+        .as_deref()
+        .map(parse_connections)
+        .unwrap_or_default()
+}
+
+fn collect_listening_ports(app: &mut App) -> Vec<crate::model::ListeningPort> {
+    if cfg!(target_os = "windows") {
+        match capture_powershell_output(app, CommandSourceId::LsofPorts, POWERSHELL_PORTS_COMMAND)
+            .and_then(|output| {
+                let ports = parse_powershell_listening_ports(&output);
+                if ports.is_empty() {
+                    Err("PowerShell returned no listening port data".to_string())
+                } else {
+                    Ok(ports)
+                }
+            }) {
+            Ok(ports) => return ports,
+            Err(error) => push_windows_fallback_event(app, "ports", "netstat -ano -p tcp", &error),
+        }
+    }
+
+    let listening_ports_command = listening_ports_command_spec();
+    let ports_res = capture_command_output(
+        app,
+        CommandSourceId::LsofPorts,
+        listening_ports_command.display,
+        listening_ports_command.program,
+        listening_ports_command.args,
+    );
+    ports_res
+        .as_deref()
+        .map(parse_listening_ports)
+        .unwrap_or_default()
+}
+
+fn capture_powershell_output(
+    app: &mut App,
+    source_id: CommandSourceId,
+    command: &str,
+) -> Result<String, String> {
+    capture_command_output(
+        app,
+        source_id,
+        &format!("powershell.exe -NoProfile -Command {command}"),
+        "powershell.exe",
+        &["-NoProfile", "-Command", command],
+    )
+}
+
+fn push_windows_fallback_event(app: &mut App, area: &str, fallback: &str, error: &str) {
+    let message = format!(
+        "{area}: PowerShell network command failed or returned no data; falling back to {fallback}. If localized command output is unsupported, run with PowerShell network cmdlets or administrator permissions. Cause: {error}"
+    );
+    if app
+        .recent_events
+        .last()
+        .is_none_or(|event| event.message != message)
+    {
+        app.recent_events.push(NetworkEvent::new(
+            NetworkEventKind::SystemError,
+            EventSeverity::Warning,
+            message,
+        ));
+    }
 }
 
 fn enrich_windows_listening_ports(listening_ports: &mut [crate::model::ListeningPort]) {
