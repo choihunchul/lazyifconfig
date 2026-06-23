@@ -907,12 +907,21 @@ pub fn draw(frame: &mut Frame, app: &App) {
                         .current_snapshot
                         .as_ref()
                         .map(|snapshot| {
-                            snapshot
-                                .listening_ports
-                                .iter()
-                                .filter(|port| port.pid == *pid)
-                                .map(|port| (port.local_port.as_str(), port.proto.as_str()))
-                                .collect()
+                            if pid == "-" || pid.is_empty() {
+                                snapshot
+                                    .listening_ports
+                                    .get(*index)
+                                    .into_iter()
+                                    .map(|port| (port.local_port.as_str(), port.proto.as_str()))
+                                    .collect()
+                            } else {
+                                snapshot
+                                    .listening_ports
+                                    .iter()
+                                    .filter(|port| port.pid == *pid)
+                                    .map(|port| (port.local_port.as_str(), port.proto.as_str()))
+                                    .collect()
+                            }
                         })
                         .unwrap_or_default();
                     let lines = match app.port_details_section {
@@ -1352,6 +1361,63 @@ mod tests {
         assert!(rendered.contains("Xms       512M"));
         assert!(rendered.contains("Jar       monitor.jar"));
         assert!(!rendered.contains("=== Port Summary ==="));
+    }
+
+    #[test]
+    fn ports_details_do_not_group_unknown_linux_pids() {
+        let mut app = App::default();
+        app.view_mode = ViewMode::Ports;
+        app.replace_snapshot(NetworkSnapshot {
+            interfaces: vec![],
+            connections: vec![],
+            listening_ports: vec![
+                ListeningPort {
+                    proto: "tcp".to_string(),
+                    local_ip: "0.0.0.0".to_string(),
+                    local_port: "53".to_string(),
+                    pid: "-".to_string(),
+                    command: "-".to_string(),
+                    user: "-".to_string(),
+                    process: None,
+                },
+                ListeningPort {
+                    proto: "tcp".to_string(),
+                    local_ip: "0.0.0.0".to_string(),
+                    local_port: "3001".to_string(),
+                    pid: "-".to_string(),
+                    command: "-".to_string(),
+                    user: "-".to_string(),
+                    process: None,
+                },
+                ListeningPort {
+                    proto: "tcp".to_string(),
+                    local_ip: "0.0.0.0".to_string(),
+                    local_port: "8080".to_string(),
+                    pid: "-".to_string(),
+                    command: "-".to_string(),
+                    user: "-".to_string(),
+                    process: None,
+                },
+            ],
+            routes: vec![],
+            captured_at_secs: 0,
+        });
+        app.selected_index = 1;
+
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("3001 LISTEN"));
+        assert!(!rendered.contains("53 LISTEN"));
+        assert!(!rendered.contains("8080 LISTEN"));
     }
 
     fn route_test_app(section: RouteInspectorSection) -> App {
