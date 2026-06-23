@@ -22,7 +22,7 @@ It combines local interface, route, connection, port, and public IP data into a 
 - Interface inventory: shows interface name, status, type, MAC address, MTU, IPv4/IPv6 addresses, prefixes, gateways, and traffic counters when the platform exposes them.
 - Network view: groups interfaces by subnet so LAN, loopback, VPN, container, link-local, public, and unassigned networks are easier to scan.
 - Connections view: lists active local and remote endpoints from `netstat -an`, with sorting, filtering, copy actions, and per-connection details.
-- Ports view: lists listening TCP ports from `lsof` on macOS, `ss` on Linux, and `netstat` on Windows, with process details and a kill action.
+- Ports view: lists listening TCP ports from `lsof` on macOS, `ss` on Linux, and `netstat` on Windows, with separate Summary/Detail panes, process metadata, and kill/restart actions.
 - Route Inspector: summarizes default routes, route tables, route diagnostics, VPN route hints, and raw route command output.
 - Destination path lookup: checks how a destination would be routed and renders a compact path view with interface, gateway, source IP, and VPN indication when available.
 - Diagnostics: flags missing default routes, multiple defaults, down interfaces used by routes, missing interfaces, and route metric conflicts.
@@ -63,6 +63,7 @@ Those requests are part of the feature being run; `lazyifconfig` itself still do
 
 Tools Hub uses native Rust for TLS inspection, so `openssl` is not required.
 On Windows, DNS and reverse DNS use `nslookup`, Whois uses RDAP over HTTPS, and traceroute uses `tracert`.
+Windows port and interface-stat collection avoids blocking tab changes where possible: port details are loaded only from the Detail pane, and RX/TX adapter statistics are refreshed at a lower cadence.
 
 ## Install
 
@@ -80,11 +81,15 @@ sudo apt update
 sudo apt install lazyifconfig
 ```
 
-From WinGet on Windows:
+From WinGet on Windows after the first manifest is accepted into
+`microsoft/winget-pkgs`:
 
 ```powershell
 winget install Choihunchul.Lazyifconfig
 ```
+
+Until then, use the Windows `.zip` from GitHub Releases or install from source
+with Cargo.
 
 From crates.io:
 
@@ -145,6 +150,7 @@ cargo run --release -- tools traceroute 8.8.8.8
 - `/` and `[` : scroll in list-heavy views
 - In Route Inspector: `Enter` starts destination path lookup, `Tab` switches inspector sections, `Home`/`End` or `1`-`4` jumps between sections, `/` filters routes, `o` opens raw route output
 - In Connections: `Tab` switches the detail tabs
+- In Ports: `Tab` switches between Summary and Detail; Windows loads process metadata only when Detail is selected
 - In Tools: `Tab` moves between input fields and the first field is focused when the modal opens
 
 Some views expose additional actions in the footer, including filtering ports, copying values, WHOIS lookup, and raw output inspection.

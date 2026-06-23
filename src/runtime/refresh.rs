@@ -26,6 +26,8 @@ use crate::runtime::update_flow::{
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const WINDOWS_INTERFACE_STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
 pub fn tick_update(app: &mut App) -> Result<(), String> {
     // Merge async command outputs
     if let Ok(lock) = app.async_command_outputs.lock() {
@@ -308,6 +310,18 @@ fn collect_interface_stats(
     parsed: Vec<crate::model::NetworkInterface>,
 ) -> Vec<crate::model::NetworkInterface> {
     if cfg!(target_os = "windows") {
+        let now = std::time::Instant::now();
+        if !should_collect_windows_interface_stats(app.last_interface_stats_fetch, now) {
+            return reuse_previous_interface_stats(
+                parsed,
+                app.current_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.interfaces.as_slice())
+                    .unwrap_or(&[]),
+            );
+        }
+        app.last_interface_stats_fetch = Some(now);
+
         match capture_powershell_output(
             app,
             CommandSourceId::InterfaceStats,
@@ -329,6 +343,29 @@ fn collect_interface_stats(
 
     let stats_out = run_netstat_ib().unwrap_or_else(|_| raw_out.to_string());
     merge_stats(&stats_out, parsed)
+}
+
+fn should_collect_windows_interface_stats(
+    last_fetch: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> bool {
+    last_fetch
+        .is_none_or(|last_fetch| now.duration_since(last_fetch) >= WINDOWS_INTERFACE_STATS_INTERVAL)
+}
+
+fn reuse_previous_interface_stats(
+    mut parsed: Vec<crate::model::NetworkInterface>,
+    previous: &[crate::model::NetworkInterface],
+) -> Vec<crate::model::NetworkInterface> {
+    for interface in &mut parsed {
+        if interface.stats.is_none() {
+            interface.stats = previous
+                .iter()
+                .find(|previous| previous.name == interface.name)
+                .and_then(|previous| previous.stats.clone());
+        }
+    }
+    parsed
 }
 
 fn collect_routes(route_output: Option<&str>) -> Vec<RouteEntry> {
@@ -725,6 +762,57 @@ mod tests {
             cached.command_line.as_deref(),
             Some("python -m http.server 5050")
         );
+    }
+
+    #[test]
+    fn windows_interface_stats_collection_is_throttled() {
+        let now = std::time::Instant::now();
+
+        assert!(should_collect_windows_interface_stats(None, now));
+        assert!(!should_collect_windows_interface_stats(
+            Some(now - std::time::Duration::from_secs(9)),
+            now
+        ));
+        assert!(should_collect_windows_interface_stats(
+            Some(now - std::time::Duration::from_secs(10)),
+            now
+        ));
+    }
+
+    #[test]
+    fn previous_interface_stats_are_reused_by_name() {
+        let previous_stats = crate::model::InterfaceStats {
+            rx_bytes: 1000,
+            tx_bytes: 2000,
+            rx_packets: 10,
+            tx_packets: 20,
+        };
+        let previous = vec![crate::model::NetworkInterface {
+            name: "Wi-Fi".to_string(),
+            network_kind: crate::model::NetworkKind::Lan,
+            interface_type: crate::model::InterfaceType::WifiOrEthernet,
+            status: crate::model::InterfaceStatus::Up,
+            ipv4: vec![],
+            ipv6: vec![],
+            mac_address: None,
+            mtu: None,
+            stats: Some(previous_stats.clone()),
+        }];
+        let parsed = vec![crate::model::NetworkInterface {
+            name: "Wi-Fi".to_string(),
+            network_kind: crate::model::NetworkKind::Lan,
+            interface_type: crate::model::InterfaceType::WifiOrEthernet,
+            status: crate::model::InterfaceStatus::Up,
+            ipv4: vec![],
+            ipv6: vec![],
+            mac_address: None,
+            mtu: None,
+            stats: None,
+        }];
+
+        let reused = reuse_previous_interface_stats(parsed, &previous);
+
+        assert_eq!(reused[0].stats.as_ref(), Some(&previous_stats));
     }
 
     #[cfg(not(target_os = "windows"))]

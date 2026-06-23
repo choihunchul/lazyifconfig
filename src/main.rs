@@ -58,6 +58,10 @@ fn start_selected_tool(app: &mut App) {
     });
 }
 
+fn should_refresh_immediately_after_port_navigation() -> bool {
+    !cfg!(target_os = "windows")
+}
+
 async fn run_tools_cli_command(args: &[String]) -> Result<String, String> {
     if args.is_empty() || args[0] == "-h" || args[0] == "--help" {
         return Ok(lazyifconfig::tools::tools_cli_usage());
@@ -674,7 +678,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Char('l') | KeyCode::Right | KeyCode::Char('ㅣ') => {
                             app.help_visible = false;
                             app.select_next_view_mode();
-                            if app.view_mode == ViewMode::Ports {
+                            if app.view_mode == ViewMode::Ports
+                                && should_refresh_immediately_after_port_navigation()
+                            {
                                 let _ = tick_update(&mut app);
                                 last_tick = std::time::Instant::now();
                             }
@@ -682,7 +688,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Char('h') | KeyCode::Left | KeyCode::Char('ㅗ') => {
                             app.help_visible = false;
                             app.select_previous_view_mode();
-                            if app.view_mode == ViewMode::Ports {
+                            if app.view_mode == ViewMode::Ports
+                                && should_refresh_immediately_after_port_navigation()
+                            {
                                 let _ = tick_update(&mut app);
                                 last_tick = std::time::Instant::now();
                             }
@@ -696,6 +704,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 app.select_next_port_details_section();
                                 if app.port_details_section
                                     == lazyifconfig::app::PortDetailsSection::Detail
+                                    && should_refresh_immediately_after_port_navigation()
                                 {
                                     let _ = tick_update(&mut app);
                                     last_tick = std::time::Instant::now();
@@ -711,6 +720,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 app.select_previous_port_details_section();
                                 if app.port_details_section
                                     == lazyifconfig::app::PortDetailsSection::Detail
+                                    && should_refresh_immediately_after_port_navigation()
                                 {
                                     let _ = tick_update(&mut app);
                                     last_tick = std::time::Instant::now();
@@ -830,8 +840,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Char('p') | KeyCode::Char('ㅔ') => {
                             app.help_visible = false;
                             app.set_view_mode(ViewMode::Ports);
-                            let _ = tick_update(&mut app);
-                            last_tick = std::time::Instant::now();
+                            if should_refresh_immediately_after_port_navigation() {
+                                let _ = tick_update(&mut app);
+                                last_tick = std::time::Instant::now();
+                            }
                         }
                         KeyCode::Char('e') | KeyCode::Char('ㄷ') => {
                             app.help_visible = false;
@@ -978,4 +990,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_does_not_refresh_synchronously_on_port_navigation() {
+        assert_eq!(
+            should_refresh_immediately_after_port_navigation(),
+            !cfg!(target_os = "windows")
+        );
+    }
 }
