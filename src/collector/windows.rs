@@ -123,11 +123,18 @@ pub fn parse_powershell_connections(input: &str) -> Vec<ActiveConnection> {
 
 pub fn merge_powershell_interface_stats(
     input: &str,
-    mut interfaces: Vec<NetworkInterface>,
+    interfaces: Vec<NetworkInterface>,
 ) -> Vec<NetworkInterface> {
     let stats = parse_powershell_interface_stats(input);
+    merge_windows_interface_stats(interfaces, &stats)
+}
+
+pub fn merge_windows_interface_stats(
+    mut interfaces: Vec<NetworkInterface>,
+    stats: &[WindowsInterfaceStats],
+) -> Vec<NetworkInterface> {
     for interface in &mut interfaces {
-        if let Some(stat) = stats.iter().find(|stat| stat.name == interface.name) {
+        if let Some(stat) = stats.iter().find(|stat| stat.matches_name(&interface.name)) {
             interface.stats = Some(stat.stats.clone());
         }
     }
@@ -143,7 +150,8 @@ fn parse_powershell_interface_stats(input: &str) -> Vec<WindowsInterfaceStats> {
                 .or_else(|| string_field(item, "InterfaceAlias"))
                 .or_else(|| string_field(item, "InterfaceDescription"))?;
             Some(WindowsInterfaceStats {
-                name,
+                alias: name,
+                description: string_field(item, "InterfaceDescription").unwrap_or_default(),
                 stats: InterfaceStats {
                     rx_bytes: u64_field(item, "ReceivedBytes").unwrap_or(0),
                     tx_bytes: u64_field(item, "SentBytes").unwrap_or(0),
@@ -159,9 +167,74 @@ fn parse_powershell_interface_stats(input: &str) -> Vec<WindowsInterfaceStats> {
         .collect()
 }
 
-struct WindowsInterfaceStats {
-    name: String,
-    stats: InterfaceStats,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowsInterfaceStats {
+    pub alias: String,
+    pub description: String,
+    pub stats: InterfaceStats,
+}
+
+impl WindowsInterfaceStats {
+    fn matches_name(&self, name: &str) -> bool {
+        self.alias == name || self.description == name
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn collect_windows_interface_stats() -> Result<Vec<WindowsInterfaceStats>, String> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        FreeMibTable, GetIfTable2, MIB_IF_TABLE2,
+    };
+
+    struct MibTable(*mut MIB_IF_TABLE2);
+
+    impl Drop for MibTable {
+        fn drop(&mut self) {
+            unsafe {
+                FreeMibTable(self.0.cast());
+            }
+        }
+    }
+
+    let mut table = std::ptr::null_mut();
+    let error = unsafe { GetIfTable2(&mut table) };
+    if error != 0 {
+        return Err(format!("GetIfTable2 failed with Windows error {error}"));
+    }
+    if table.is_null() {
+        return Err("GetIfTable2 returned a null table".to_string());
+    }
+
+    let table = MibTable(table);
+    let table_ref = unsafe { &*table.0 };
+    let rows = unsafe {
+        std::slice::from_raw_parts(table_ref.Table.as_ptr(), table_ref.NumEntries as usize)
+    };
+
+    Ok(rows
+        .iter()
+        .map(|row| WindowsInterfaceStats {
+            alias: wide_string(&row.Alias),
+            description: wide_string(&row.Description),
+            stats: InterfaceStats {
+                rx_bytes: row.InOctets,
+                tx_bytes: row.OutOctets,
+                rx_packets: row.InUcastPkts.saturating_add(row.InNUcastPkts),
+                tx_packets: row.OutUcastPkts.saturating_add(row.OutNUcastPkts),
+            },
+        })
+        .filter(|stat| !stat.alias.is_empty() || !stat.description.is_empty())
+        .collect())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn collect_windows_interface_stats() -> Result<Vec<WindowsInterfaceStats>, String> {
+    Err("Windows interface stats are available only on Windows".to_string())
+}
+
+fn wide_string(value: &[u16]) -> String {
+    let end = value.iter().position(|ch| *ch == 0).unwrap_or(value.len());
+    String::from_utf16_lossy(&value[..end]).trim().to_string()
 }
 
 fn parse_interface_addresses(value: Option<&Value>) -> Vec<InterfaceAddress> {
@@ -402,5 +475,62 @@ mod tests {
                 tx_packets: 9544740,
             })
         );
+    }
+
+    #[test]
+    fn merges_windows_interface_statistics_by_alias_or_description() {
+        let interfaces = vec![
+            NetworkInterface {
+                interface_type: InterfaceType::WifiOrEthernet,
+                network_kind: NetworkKind::Lan,
+                status: InterfaceStatus::Up,
+                mtu: Some(1500),
+                name: "Wi-Fi".to_string(),
+                ipv4: Vec::new(),
+                ipv6: Vec::new(),
+                mac_address: None,
+                stats: None,
+            },
+            NetworkInterface {
+                interface_type: InterfaceType::WifiOrEthernet,
+                network_kind: NetworkKind::Lan,
+                status: InterfaceStatus::Up,
+                mtu: Some(1500),
+                name: "USB Ethernet".to_string(),
+                ipv4: Vec::new(),
+                ipv6: Vec::new(),
+                mac_address: None,
+                stats: None,
+            },
+        ];
+        let wifi_stats = InterfaceStats {
+            rx_bytes: 1000,
+            tx_bytes: 2000,
+            rx_packets: 10,
+            tx_packets: 20,
+        };
+        let usb_stats = InterfaceStats {
+            rx_bytes: 3000,
+            tx_bytes: 4000,
+            rx_packets: 30,
+            tx_packets: 40,
+        };
+        let stats = vec![
+            WindowsInterfaceStats {
+                alias: "Wi-Fi".to_string(),
+                description: "Intel(R) Wi-Fi 6".to_string(),
+                stats: wifi_stats.clone(),
+            },
+            WindowsInterfaceStats {
+                alias: "Ethernet 2".to_string(),
+                description: "USB Ethernet".to_string(),
+                stats: usb_stats.clone(),
+            },
+        ];
+
+        let merged = merge_windows_interface_stats(interfaces, &stats);
+
+        assert_eq!(merged[0].stats.as_ref(), Some(&wifi_stats));
+        assert_eq!(merged[1].stats.as_ref(), Some(&usb_stats));
     }
 }

@@ -6,7 +6,8 @@ use crossterm::{
 use lazyifconfig::app::{App, NavigationItem, PortProcessAction, ViewMode};
 use lazyifconfig::command::{run_kill, run_restart_process};
 use lazyifconfig::model::{
-    CommandSourceId, EventSeverity, NetworkEvent, NetworkEventKind, RouteInspectorSection,
+    CommandOutput, CommandSourceId, EventSeverity, NetworkEvent, NetworkEventKind,
+    RouteInspectorSection,
 };
 use lazyifconfig::runtime::refresh::tick_update;
 use lazyifconfig::runtime::routes::{
@@ -62,6 +63,131 @@ fn should_refresh_immediately_after_port_navigation() -> bool {
     !cfg!(target_os = "windows")
 }
 
+struct RefreshTask {
+    base_event_count: usize,
+    show_all: bool,
+    handle: tokio::task::JoinHandle<Result<App, String>>,
+}
+
+fn start_refresh_task(app: &App) -> RefreshTask {
+    let mut refreshed = app.clone();
+    let base_event_count = app.recent_events.len();
+    let show_all = app.show_all;
+    let handle = tokio::task::spawn_blocking(move || {
+        tick_update(&mut refreshed)?;
+        Ok(refreshed)
+    });
+
+    RefreshTask {
+        base_event_count,
+        show_all,
+        handle,
+    }
+}
+
+fn request_refresh(
+    app: &App,
+    refresh_task: &mut Option<RefreshTask>,
+    last_tick: &mut std::time::Instant,
+) {
+    if refresh_task.is_none() {
+        *refresh_task = Some(start_refresh_task(app));
+    }
+    *last_tick = std::time::Instant::now();
+}
+
+async fn apply_finished_refresh_task(app: &mut App, refresh_task: &mut Option<RefreshTask>) {
+    if !refresh_task
+        .as_ref()
+        .is_some_and(|task| task.handle.is_finished())
+    {
+        return;
+    }
+
+    let task = refresh_task.take().expect("checked refresh task presence");
+    match task.handle.await {
+        Ok(Ok(refreshed)) => {
+            if task.show_all == app.show_all {
+                apply_refresh_result(app, refreshed, task.base_event_count);
+            }
+        }
+        Ok(Err(error)) => app.push_event(NetworkEvent::new(
+            NetworkEventKind::SystemError,
+            EventSeverity::Error,
+            format!("Refresh failed: {error}"),
+        )),
+        Err(error) => app.push_event(NetworkEvent::new(
+            NetworkEventKind::SystemError,
+            EventSeverity::Error,
+            format!("Refresh task failed: {error}"),
+        )),
+    }
+}
+
+fn apply_refresh_result(app: &mut App, refreshed: App, base_event_count: usize) {
+    let selected_interface = app.selected_interface_name().map(str::to_owned);
+    let refresh_events = refreshed
+        .recent_events
+        .into_iter()
+        .skip(base_event_count)
+        .collect::<Vec<_>>();
+
+    app.current_snapshot = refreshed.current_snapshot;
+    app.previous_snapshot = refreshed.previous_snapshot;
+    app.traffic_history = refreshed.traffic_history;
+    merge_refresh_command_outputs(app, refreshed.command_outputs);
+    app.process_metrics = refreshed.process_metrics;
+    app.current_public_ip_info = refreshed.current_public_ip_info;
+    app.last_public_ip_fetch = refreshed.last_public_ip_fetch;
+    app.last_interface_stats_fetch = refreshed.last_interface_stats_fetch;
+    app.update_status = refreshed.update_status;
+    app.pending_update = refreshed.pending_update;
+    app.last_update_check = refreshed.last_update_check;
+    app.attempted_update_version = refreshed.attempted_update_version;
+    app.latest_release_date = refreshed.latest_release_date;
+    app.route_inspector.diagnostics = refreshed.route_inspector.diagnostics;
+    app.recent_events.extend(refresh_events);
+    if app.recent_events.len() > 100 {
+        let overflow = app.recent_events.len() - 100;
+        app.recent_events.drain(0..overflow);
+    }
+
+    app.update_navigation_items();
+    if let Some(name) = selected_interface {
+        if let Some(index) = app
+            .navigation_items
+            .iter()
+            .position(|item| matches!(item, NavigationItem::Interface { name: item_name, .. } if item_name == &name))
+        {
+            app.selected_index = index;
+        }
+    }
+}
+
+fn merge_refresh_command_outputs(
+    app: &mut App,
+    refreshed: std::collections::HashMap<CommandSourceId, CommandOutput>,
+) {
+    const REFRESH_SOURCES: &[CommandSourceId] = &[
+        CommandSourceId::Ifconfig,
+        CommandSourceId::NetstatRoutes,
+        CommandSourceId::DefaultRoute,
+        CommandSourceId::Ipv6Routes,
+        CommandSourceId::IpRules,
+        CommandSourceId::NetstatConnections,
+        CommandSourceId::LsofPorts,
+        CommandSourceId::InterfaceStats,
+        CommandSourceId::PublicIp,
+        CommandSourceId::GitHubRelease,
+    ];
+
+    for source in REFRESH_SOURCES {
+        if let Some(output) = refreshed.get(source) {
+            app.command_outputs.insert(*source, output.clone());
+        }
+    }
+}
+
 async fn run_tools_cli_command(args: &[String]) -> Result<String, String> {
     if args.is_empty() || args[0] == "-h" || args[0] == "--help" {
         return Ok(lazyifconfig::tools::tools_cli_usage());
@@ -106,14 +232,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_tick = std::time::Instant::now();
     let tick_rate = Duration::from_secs(2);
     let mut restart_requested = false;
+    let mut refresh_task: Option<RefreshTask> = None;
 
     loop {
+        apply_finished_refresh_task(&mut app, &mut refresh_task).await;
         app.drain_pending_tool_results();
         terminal.draw(|f| lazyifconfig::ui::draw(f, &app))?;
 
-        let timeout = tick_rate
+        let mut timeout = tick_rate
             .checked_sub(last_tick.elapsed())
             .unwrap_or(Duration::from_secs(0));
+        if refresh_task.is_some() {
+            timeout = timeout.min(Duration::from_millis(50));
+        }
 
         if event::poll(timeout)? {
             match event::read()? {
@@ -198,8 +329,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 EventSeverity::Info,
                                                 message,
                                             ));
-                                            let _ = tick_update(&mut app);
-                                            last_tick = std::time::Instant::now();
+                                            request_refresh(
+                                                &app,
+                                                &mut refresh_task,
+                                                &mut last_tick,
+                                            );
                                         }
                                         Err(error) => {
                                             let action = match confirmation.action {
@@ -644,8 +778,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Char('q') | KeyCode::Char('ㅂ') => break,
                         KeyCode::Char('r') | KeyCode::Char('ㄱ') => {
                             app.help_visible = false;
-                            let _ = tick_update(&mut app);
-                            last_tick = std::time::Instant::now();
+                            request_refresh(&app, &mut refresh_task, &mut last_tick);
                         }
                         KeyCode::Char('u') | KeyCode::Char('ㅕ') => {
                             app.help_visible = false;
@@ -681,8 +814,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if app.view_mode == ViewMode::Ports
                                 && should_refresh_immediately_after_port_navigation()
                             {
-                                let _ = tick_update(&mut app);
-                                last_tick = std::time::Instant::now();
+                                request_refresh(&app, &mut refresh_task, &mut last_tick);
                             }
                         }
                         KeyCode::Char('h') | KeyCode::Left | KeyCode::Char('ㅗ') => {
@@ -691,8 +823,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if app.view_mode == ViewMode::Ports
                                 && should_refresh_immediately_after_port_navigation()
                             {
-                                let _ = tick_update(&mut app);
-                                last_tick = std::time::Instant::now();
+                                request_refresh(&app, &mut refresh_task, &mut last_tick);
                             }
                         }
                         KeyCode::Tab => {
@@ -706,8 +837,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     == lazyifconfig::app::PortDetailsSection::Detail
                                     && should_refresh_immediately_after_port_navigation()
                                 {
-                                    let _ = tick_update(&mut app);
-                                    last_tick = std::time::Instant::now();
+                                    request_refresh(&app, &mut refresh_task, &mut last_tick);
                                 }
                             }
                         }
@@ -722,8 +852,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     == lazyifconfig::app::PortDetailsSection::Detail
                                     && should_refresh_immediately_after_port_navigation()
                                 {
-                                    let _ = tick_update(&mut app);
-                                    last_tick = std::time::Instant::now();
+                                    request_refresh(&app, &mut refresh_task, &mut last_tick);
                                 }
                             }
                         }
@@ -826,8 +955,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Char('a') | KeyCode::Char('ㅁ') => {
                             app.help_visible = false;
                             app.show_all = !app.show_all;
-                            let _ = tick_update(&mut app);
-                            last_tick = std::time::Instant::now();
+                            request_refresh(&app, &mut refresh_task, &mut last_tick);
                         }
                         KeyCode::Char('i') | KeyCode::Char('ㅑ') => {
                             app.help_visible = false;
@@ -841,8 +969,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             app.help_visible = false;
                             app.set_view_mode(ViewMode::Ports);
                             if should_refresh_immediately_after_port_navigation() {
-                                let _ = tick_update(&mut app);
-                                last_tick = std::time::Instant::now();
+                                request_refresh(&app, &mut refresh_task, &mut last_tick);
                             }
                         }
                         KeyCode::Char('e') | KeyCode::Char('ㄷ') => {
@@ -974,8 +1101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if last_tick.elapsed() >= tick_rate {
-            let _ = tick_update(&mut app);
-            last_tick = std::time::Instant::now();
+            request_refresh(&app, &mut refresh_task, &mut last_tick);
         }
     }
 
@@ -995,6 +1121,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lazyifconfig::model::{
+        InterfaceStatus, InterfaceType, NetworkInterface, NetworkKind, NetworkSnapshot,
+    };
 
     #[test]
     fn windows_does_not_refresh_synchronously_on_port_navigation() {
@@ -1002,5 +1131,132 @@ mod tests {
             should_refresh_immediately_after_port_navigation(),
             !cfg!(target_os = "windows")
         );
+    }
+
+    #[test]
+    fn applying_refresh_result_preserves_current_view_and_selected_interface() {
+        let mut app = App::default();
+        app.replace_snapshot(test_snapshot(vec![
+            test_interface("Wi-Fi"),
+            test_interface("VPN"),
+        ]));
+        app.selected_index = 1;
+
+        let mut refreshed = app.clone();
+        refreshed.replace_snapshot(test_snapshot(vec![
+            test_interface("Loopback"),
+            test_interface("VPN"),
+            test_interface("Wi-Fi"),
+        ]));
+        refreshed.set_view_mode(ViewMode::Tools);
+
+        apply_refresh_result(&mut app, refreshed, 0);
+
+        assert_eq!(app.view_mode, ViewMode::Interface);
+        assert_eq!(app.selected_interface_name(), Some("VPN"));
+    }
+
+    #[test]
+    fn applying_refresh_result_appends_new_refresh_events_without_dropping_local_events() {
+        let mut app = App::default();
+        app.push_event(NetworkEvent::new(
+            NetworkEventKind::ActionCopied,
+            EventSeverity::Info,
+            "local event".to_string(),
+        ));
+        let base_event_count = app.recent_events.len();
+
+        let mut refreshed = app.clone();
+        refreshed.push_event(NetworkEvent::new(
+            NetworkEventKind::PublicIpChanged,
+            EventSeverity::Info,
+            "refresh event".to_string(),
+        ));
+
+        app.push_event(NetworkEvent::new(
+            NetworkEventKind::ActionCopied,
+            EventSeverity::Info,
+            "later local event".to_string(),
+        ));
+
+        apply_refresh_result(&mut app, refreshed, base_event_count);
+
+        let messages = app
+            .recent_events
+            .iter()
+            .map(|event| event.message.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            messages,
+            vec!["local event", "later local event", "refresh event"]
+        );
+    }
+
+    #[test]
+    fn applying_refresh_result_keeps_non_refresh_command_outputs() {
+        let mut app = App::default();
+        app.command_outputs.insert(
+            CommandSourceId::RoutePath,
+            test_command_output("fresh route path output"),
+        );
+
+        let mut refreshed = app.clone();
+        refreshed.command_outputs.insert(
+            CommandSourceId::RoutePath,
+            test_command_output("stale route path output"),
+        );
+        refreshed.command_outputs.insert(
+            CommandSourceId::Ifconfig,
+            test_command_output("fresh interface output"),
+        );
+
+        apply_refresh_result(&mut app, refreshed, 0);
+
+        assert_eq!(
+            app.command_outputs
+                .get(&CommandSourceId::RoutePath)
+                .map(|output| output.stdout.as_str()),
+            Some("fresh route path output")
+        );
+        assert_eq!(
+            app.command_outputs
+                .get(&CommandSourceId::Ifconfig)
+                .map(|output| output.stdout.as_str()),
+            Some("fresh interface output")
+        );
+    }
+
+    fn test_snapshot(interfaces: Vec<NetworkInterface>) -> NetworkSnapshot {
+        NetworkSnapshot {
+            interfaces,
+            connections: Vec::new(),
+            listening_ports: Vec::new(),
+            routes: Vec::new(),
+            captured_at_secs: 1,
+        }
+    }
+
+    fn test_interface(name: &str) -> NetworkInterface {
+        NetworkInterface {
+            name: name.to_string(),
+            network_kind: NetworkKind::Lan,
+            interface_type: InterfaceType::WifiOrEthernet,
+            status: InterfaceStatus::Up,
+            ipv4: Vec::new(),
+            ipv6: Vec::new(),
+            mac_address: None,
+            mtu: None,
+            stats: None,
+        }
+    }
+
+    fn test_command_output(stdout: &str) -> lazyifconfig::model::CommandOutput {
+        lazyifconfig::model::CommandOutput {
+            command: "test".to_string(),
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+            executed_at: std::time::SystemTime::now(),
+            exit_code: Some(0),
+        }
     }
 }

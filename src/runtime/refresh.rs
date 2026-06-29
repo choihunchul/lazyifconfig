@@ -9,8 +9,8 @@ use crate::collector::system::{
     collect_process_details, collect_process_metrics, collect_windows_process_details_by_pid,
 };
 use crate::collector::windows::{
-    merge_powershell_interface_stats, parse_powershell_connections, parse_powershell_interfaces,
-    parse_powershell_listening_ports, parse_powershell_routes,
+    collect_windows_interface_stats, merge_windows_interface_stats, parse_powershell_connections,
+    parse_powershell_interfaces, parse_powershell_listening_ports, parse_powershell_routes,
 };
 use crate::command::{
     default_route_command_spec, interface_command_spec, listening_ports_command_spec,
@@ -206,8 +206,6 @@ const POWERSHELL_INTERFACES_COMMAND: &str = "$ErrorActionPreference='Stop'; Get-
 const POWERSHELL_ROUTES_COMMAND: &str = "$ErrorActionPreference='Stop'; Get-NetRoute | Select-Object DestinationPrefix,NextHop,InterfaceAlias,InterfaceIndex,RouteMetric,Protocol,AddressFamily | ConvertTo-Json -Depth 4 -Compress";
 const POWERSHELL_CONNECTIONS_COMMAND: &str = "$ErrorActionPreference='Stop'; Get-NetTCPConnection | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort,State | ConvertTo-Json -Depth 4 -Compress";
 const POWERSHELL_PORTS_COMMAND: &str = "$ErrorActionPreference='Stop'; Get-NetTCPConnection -State Listen | Select-Object LocalAddress,LocalPort,OwningProcess | ConvertTo-Json -Depth 4 -Compress";
-const POWERSHELL_INTERFACE_STATS_COMMAND: &str = "$ErrorActionPreference='Stop'; Get-NetAdapterStatistics | Select-Object Name,ReceivedBytes,SentBytes,ReceivedUnicastPackets,SentUnicastPackets | ConvertTo-Json -Depth 4 -Compress";
-
 fn collect_interfaces(
     app: &mut App,
 ) -> Result<(String, Vec<crate::model::NetworkInterface>), String> {
@@ -322,18 +320,41 @@ fn collect_interface_stats(
         }
         app.last_interface_stats_fetch = Some(now);
 
-        match capture_powershell_output(
-            app,
-            CommandSourceId::InterfaceStats,
-            POWERSHELL_INTERFACE_STATS_COMMAND,
-        ) {
-            Ok(output) => return merge_powershell_interface_stats(&output, parsed),
+        match collect_windows_interface_stats() {
+            Ok(stats) => {
+                let stdout = stats
+                    .iter()
+                    .map(|stat| {
+                        format!(
+                            "{}\t{}\trx_bytes={}\ttx_bytes={}\trx_packets={}\ttx_packets={}",
+                            stat.alias,
+                            stat.description,
+                            stat.stats.rx_bytes,
+                            stat.stats.tx_bytes,
+                            stat.stats.rx_packets,
+                            stat.stats.tx_packets
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                app.command_outputs.insert(
+                    CommandSourceId::InterfaceStats,
+                    CommandOutput {
+                        command: "GetIfTable2".to_string(),
+                        stdout,
+                        stderr: String::new(),
+                        executed_at: std::time::SystemTime::now(),
+                        exit_code: Some(0),
+                    },
+                );
+                return merge_windows_interface_stats(parsed, &stats);
+            }
             Err(error) => {
                 app.push_event(NetworkEvent::new(
                     NetworkEventKind::SystemError,
                     EventSeverity::Warning,
                     format!(
-                        "interface stats: Windows PowerShell statistics unavailable; RX/TX graph may be empty. Cause: {error}"
+                        "interface stats: Windows native statistics unavailable; RX/TX graph may be empty. Cause: {error}"
                     ),
                 ));
                 return parsed;
@@ -731,26 +752,28 @@ mod tests {
 
     #[test]
     fn cached_process_details_are_reused_for_selected_pid() {
-        let mut app = App::default();
-        app.current_snapshot = Some(crate::model::NetworkSnapshot {
-            interfaces: vec![],
-            connections: vec![],
-            listening_ports: vec![ListeningPort {
-                proto: "tcp".to_string(),
-                local_ip: "127.0.0.1".to_string(),
-                local_port: "5050".to_string(),
-                pid: "2460".to_string(),
-                command: "python.exe".to_string(),
-                user: "-".to_string(),
-                process: Some(ProcessDetails {
-                    executable: Some("C:\\Python312\\python.exe".to_string()),
-                    command_line: Some("python -m http.server 5050".to_string()),
-                    ..ProcessDetails::default()
-                }),
-            }],
-            routes: vec![],
-            captured_at_secs: 0,
-        });
+        let app = App {
+            current_snapshot: Some(crate::model::NetworkSnapshot {
+                interfaces: vec![],
+                connections: vec![],
+                listening_ports: vec![ListeningPort {
+                    proto: "tcp".to_string(),
+                    local_ip: "127.0.0.1".to_string(),
+                    local_port: "5050".to_string(),
+                    pid: "2460".to_string(),
+                    command: "python.exe".to_string(),
+                    user: "-".to_string(),
+                    process: Some(ProcessDetails {
+                        executable: Some("C:\\Python312\\python.exe".to_string()),
+                        command_line: Some("python -m http.server 5050".to_string()),
+                        ..ProcessDetails::default()
+                    }),
+                }],
+                routes: vec![],
+                captured_at_secs: 0,
+            }),
+            ..Default::default()
+        };
 
         let cached = cached_port_process_details(&app, "2460").expect("cached process");
 

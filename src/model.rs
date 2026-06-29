@@ -452,7 +452,7 @@ impl CommandSourceId {
             }
             CommandSourceId::InterfaceStats => {
                 if cfg!(target_os = "windows") {
-                    "Get-NetAdapterStatistics"
+                    "GetIfTable2"
                 } else if cfg!(target_os = "macos") {
                     "netstat -ib"
                 } else {
